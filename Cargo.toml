@@ -1,0 +1,33 @@
+[package]
+name = "AndroidFiles"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gpui-kit = "=0.9.0"
+adb_client = "=2.1.19"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+anyhow = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+smol = "2"
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+gpui-pre = { version = "=0.3.11", features = ["test-support"] }
+gpui-pre-platform = { version = "=0.3.11", features = ["test-support"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
