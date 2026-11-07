@@ -78,6 +78,8 @@ pub fn spawn_poller(
                 PollEvent::Devices(devices) => last_devices.as_ref() != Some(devices),
                 _ => false,
             };
+            let devices_present =
+                matches!(&event, PollEvent::Devices(devices) if !devices.is_empty());
             if let PollEvent::Devices(devices) = &event {
                 last_devices = Some(devices.clone());
             }
@@ -93,7 +95,12 @@ pub fn spawn_poller(
                 std::thread::sleep(Duration::from_millis(100));
             }
 
-            backoff = (backoff * 2).min(Duration::from_secs(30));
+            backoff = if devices_present {
+                // A disconnect must reach the UI quickly while a phone is up.
+                Duration::from_secs(2)
+            } else {
+                (backoff * 2).min(Duration::from_secs(30))
+            };
         }
     });
 

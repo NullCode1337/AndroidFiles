@@ -30,27 +30,38 @@ impl AppView {
 
         let host_active = self.show_host_pane && self.focused_side == Side::Host;
         let add_wireless = cx.weak_entity();
-        let add_wireless_item = div()
-            .w_full()
-            .flex_none()
-            .px(px(8.))
-            .pb(px(8.))
-            .child(nav_row(
-                "add-wireless-device",
-                "Add wireless device",
-                IconName::Wifi,
-                NavRowColors {
-                    icon: primary,
-                    active,
-                    hover,
-                },
-                false,
-                move |_, window, cx| {
+        let add_wireless_item = div().w_full().flex_none().px(px(8.)).pb(px(8.)).child(
+            h_flex()
+                .id("add-wireless-device")
+                .w_full()
+                .h(px(26.))
+                .items_center()
+                .justify_center()
+                .gap(px(8.))
+                .rounded(px(6.))
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .on_click(move |_, window, cx| {
                     add_wireless
                         .update(cx, |this, cx| this.open_wireless_device_dialog(window, cx))
                         .ok();
-                },
-            ));
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(primary)
+                        .child(Icon::new(IconName::Wifi).size(px(15.))),
+                )
+                .child(div().text_sm().child("Add wireless device")),
+        );
+        let locations = self.selected_device.is_some().then(|| {
+            v_flex()
+                .w_full()
+                .flex_none()
+                .child(section_header("Locations", muted))
+                .child(self.render_locations(cx, muted, active, hover))
+                .into_any_element()
+        });
 
         v_flex()
             .id("sidebar")
@@ -69,29 +80,33 @@ impl AppView {
                     .pt(px(10.))
                     .px(px(8.))
                     .gap(px(1.))
-                    .child(nav_row(
-                        "nav-internal-storage",
-                        "Internal storage",
-                        IconName::HardDrive,
-                        NavRowColors {
-                            icon: primary,
-                            active,
-                            hover,
-                        },
-                        self.focused_side == Side::Device
-                            && self.selected_device.is_some()
-                            && (self.device_cwd == "/sdcard"
-                                || self.device_cwd == "/storage/emulated/0"),
-                        {
-                            let this = this.clone();
-                            move |_, _, cx| {
-                                this.update(cx, |this, cx| {
-                                    this.navigate_device("/sdcard".into(), cx)
-                                })
-                                .ok();
-                            }
-                        },
-                    ))
+                    .when(self.selected_device.is_some(), {
+                        let this = this.clone();
+                        move |el| {
+                            el.child(nav_row(
+                                "nav-internal-storage",
+                                "Internal storage",
+                                IconName::HardDrive,
+                                NavRowColors {
+                                    icon: primary,
+                                    active,
+                                    hover,
+                                },
+                                self.focused_side == Side::Device
+                                    && (self.device_cwd == "/sdcard"
+                                        || self.device_cwd == "/storage/emulated/0"),
+                                {
+                                    let this = this.clone();
+                                    move |_, _, cx| {
+                                        this.update(cx, |this, cx| {
+                                            this.navigate_device("/sdcard".into(), cx)
+                                        })
+                                        .ok();
+                                    }
+                                },
+                            ))
+                        }
+                    })
                     .child(nav_row(
                         "nav-this-computer",
                         "This computer",
@@ -113,8 +128,7 @@ impl AppView {
             .child(section_header("Favorites", muted))
             .child(self.render_quick_locations(cx, icon_color, active, hover))
             .child(self.render_favorites(cx, icon_color, active, hover))
-            .child(section_header("Locations", muted))
-            .child(self.render_locations(cx, muted, active, hover))
+            .when_some(locations, |el, locations| el.child(locations))
             .when(self.devices.is_empty(), move |el| {
                 let refresh = this.clone();
                 el.child(div().px(px(8.)).pt(px(6.)).child(nav_row(
@@ -200,6 +214,9 @@ impl AppView {
         active: Hsla,
         hover: Hsla,
     ) -> impl IntoElement {
+        if self.selected_device.is_none() || self.focused_side == Side::Host {
+            return v_flex();
+        }
         let this = cx.weak_entity();
         let add_this = this.clone();
         let muted = cx.theme().muted_foreground;

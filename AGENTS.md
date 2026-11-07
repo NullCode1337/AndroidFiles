@@ -266,7 +266,9 @@ system directories. Extend that list rather than relying on `rm -rf` failures.
 `PATH` → common SDK locations.
 
 `polling.rs` runs a thread that emits only on change, re-resolves the binary
-only while it is missing, and backs off 1s → 30s (100 ms shutdown checks).
+only while it is missing, and backs off 1s → 30s (100 ms shutdown checks)
+when idle. While any device is present it polls every 2s so disconnects show
+up quickly.
 
 ### Known sharp edges
 
@@ -305,6 +307,7 @@ for frame in /tmp/androidfiles*.ppm; do ffmpeg -loglevel error -y -i "$frame" "$
 | `/tmp/androidfiles_properties.ppm` | 1120×720 | properties dialog, copyable values |
 | `/tmp/androidfiles_wireless.ppm` | 1120×720 | add wireless device dialog |
 | `/tmp/androidfiles_sidebar_devices.ppm` | 1120×720 | USB + wireless device rows, root shortcuts |
+| `/tmp/androidfiles_disconnected.ppm` | 1120×720 | device removed after a loaded folder |
 | `/tmp/androidfiles_pair_wireless.ppm` | 1120×720 | standalone pairing dialog |
 | `/tmp/androidfiles_scrollbar.ppm` | 1120×720 | split panes with overflowing lists |
 
@@ -358,6 +361,7 @@ and the pane scrollbars.
 - Sidebar shortcuts target the highlighted pane.
 - Device Locations end with exactly `/` and `/sdcard`; `/sdcard` maps to
   `/storage/emulated/0`. Device rows show the model (serial only as fallback).
+- **Add wireless device** is pinned to the bottom of the sidebar, centred.
 - List panes narrower than `COMPACT_LIST_WIDTH` (480 px) show Name and Size
   only; wider panes add Date Modified and Permissions.
 - Each pane overlays a slim scrollbar at its right edge, visible only while
@@ -366,7 +370,12 @@ and the pane scrollbars.
   Until dragged the split is equal and follows the window; afterwards the
   chosen width is clamped so the device pane keeps `MIN_DEVICE_PANE_WIDTH`.
 - "No device connected" is centred in the device pane while the host pane
-  still lists its folder.
+  still lists its folder. The device path bar, Internal storage, and Locations
+  disappear; Favorites stays for host shortcuts. Quick locations follow the
+  highlighted pane, falling back to the PC with no device. Device-only
+  favorites are hidden with no device or while the host pane is active.
+  Stale listings are cleared, including in-flight loads that finish after the
+  device goes away.
 - Status summary is left, item count is the far-right trailing item.
 
 ### Live capture

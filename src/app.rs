@@ -474,6 +474,17 @@ impl AppView {
                     {
                         // Newly authorized: the listing failed before, so load it.
                         self.load_device_dir(cx);
+                    } else if was_ready
+                        && !self
+                            .selected_device_info()
+                            .is_some_and(|d| d.state.is_ready())
+                    {
+                        // Drop the last listing so an offline device cannot
+                        // leave its old folder visible.
+                        self.device_entries.clear();
+                        self.error = None;
+                        self.device_loading = false;
+                        self.bump_entries();
                     }
                     changed = true;
                 }
@@ -819,10 +830,17 @@ impl AppView {
 
     pub fn load_device_dir(&mut self, cx: &mut Context<Self>) {
         let Some(serial) = self.selected_device.clone() else {
+            self.device_loading = false;
+            self.device_entries.clear();
+            self.error = None;
+            self.bump_entries();
+            cx.notify();
             return;
         };
         let path = self.device_cwd.clone();
         let adb_path = self.adb_path.clone();
+        let check_serial = serial.clone();
+        let check_path = path.clone();
         self.device_loading = true;
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -834,6 +852,16 @@ impl AppView {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                // A device that vanished or a folder that changed must not
+                // repopulate the pane with a stale response.
+                if this.selected_device.as_deref() != Some(check_serial.as_str())
+                    || this.device_cwd != check_path
+                    || !this
+                        .selected_device_info()
+                        .is_some_and(|device| device.state.is_ready())
+                {
+                    return;
+                }
                 this.device_loading = false;
                 match result {
                     Ok(entries) => {
@@ -898,8 +926,13 @@ impl AppView {
         host_path: PathBuf,
         cx: &mut Context<Self>,
     ) {
-        if self.show_host_pane && self.focused_side == Side::Host {
+        if self.selected_device.is_none()
+            || (self.show_host_pane && self.focused_side == Side::Host)
+        {
             if host_path.is_dir() {
+                if self.selected_device.is_none() {
+                    self.show_host_pane = true;
+                }
                 self.navigate_host(host_path, cx);
             } else {
                 self.status_line = Some(format!("{label} is not available on this computer."));
@@ -995,7 +1028,9 @@ impl AppView {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "This computer".to_string()),
             Side::Device => {
-                if self.device_cwd == "/sdcard" {
+                if self.selected_device.is_none() {
+                    "No device".to_string()
+                } else if self.device_cwd == "/sdcard" {
                     "Internal storage".to_string()
                 } else if self.device_cwd == "/" {
                     "Device root".to_string()
@@ -2248,6 +2283,15 @@ impl AppView {
         }
         self.selected.clear();
         self.selected.insert(path.into());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_devices_for_test(
+        &mut self,
+        devices: Vec<DeviceInfo>,
+        cx: &mut Context<Self>,
+    ) {
+        self.handle_poll_event(PollEvent::Devices(devices), cx);
     }
 
     /// No phone attached, second pane open.

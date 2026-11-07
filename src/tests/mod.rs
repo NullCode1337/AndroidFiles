@@ -656,6 +656,66 @@ fn titlebar_buttons_do_not_start_a_drag() {
 
 /// The empty device pane must not blank the host listing.
 #[test]
+fn disconnect_clears_loaded_device_folder() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.disconnected".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, _| view.load_demo_snapshot_state());
+    view.update(&mut cx, |view, _| {
+        assert!(view.visible_len(Side::Device) > 0);
+    });
+
+    view.update(&mut cx, |view, cx| {
+        view.apply_devices_for_test(Vec::new(), cx)
+    });
+    view.update(&mut cx, |view, _| {
+        assert!(view.selected_device.is_none());
+        assert_eq!(view.visible_len(Side::Device), 0);
+        assert_eq!(view.current_folder_name(Side::Device), "No device");
+    });
+
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    })
+    .expect("render disconnected state");
+
+    let image = cx.capture_screenshot(handle).expect("capture disconnected");
+    let (width, height) = image.dimensions();
+    let mut out = std::fs::File::create("/tmp/androidfiles_disconnected.ppm")
+        .expect("create disconnected snapshot");
+    write!(out, "P6\n{width} {height}\n255\n").expect("header");
+    for pixel in image.pixels() {
+        out.write_all(&[pixel[0], pixel[1], pixel[2]])
+            .expect("pixel");
+    }
+    out.flush().expect("flush");
+}
+
+#[test]
 fn host_pane_lists_entries_when_device_is_empty() {
     let mut cx = HeadlessAppContext::with_platform(
         gpui_kit::platform::current_platform(true).text_system(),
@@ -795,9 +855,25 @@ fn sidebar_shortcuts_follow_the_highlighted_pane() {
 
         view.focused_side = Side::Device;
         view.open_location("Downloads", "/sdcard/Download", temp.clone(), cx);
-        assert_eq!(view.device_cwd, "/sdcard/Download");
+        assert_eq!(view.host_cwd, temp, "no-device shortcut targets the host");
+        assert!(view.show_host_pane);
+
+        view.load_demo_snapshot_state();
+        view.show_host_pane = true;
+        view.focused_side = Side::Host;
+        view.open_location("Downloads", "/sdcard/Download", temp.clone(), cx);
         assert_eq!(
             view.host_cwd, temp,
+            "highlighted host pane wins with a device"
+        );
+        assert_eq!(view.focused_side, Side::Host);
+
+        view.focused_side = Side::Device;
+        let host = view.host_cwd.clone();
+        view.open_location("Downloads", "/sdcard/Download", temp, cx);
+        assert_eq!(view.device_cwd, "/sdcard/Download");
+        assert_eq!(
+            view.host_cwd, host,
             "device navigation leaves the host pane"
         );
     });

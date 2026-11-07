@@ -316,7 +316,10 @@ impl AppView {
                     }
                 }),
             )
-            .child(self.render_path_bar(side, &path, pane_width, focused, cx))
+            .when(
+                !(side == Side::Device && self.selected_device.is_none()),
+                |el| el.child(self.render_path_bar(side, &path, pane_width, focused, cx)),
+            )
             .when(
                 self.view_mode == ViewMode::List && has_entries && !loading,
                 |el| el.child(self.render_list_header(compact, cx)),
