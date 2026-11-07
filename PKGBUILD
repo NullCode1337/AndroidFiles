@@ -5,7 +5,7 @@ pkgrel=1
 pkgdesc="Desktop file manager for Android devices over adb"
 arch=('x86_64' 'aarch64')
 url="https://github.com/NullCode1337/AndroidFiles"
-license=('unknown')
+license=('GPL-3.0-only')
 depends=(
   'android-tools'
   'fontconfig'
@@ -50,7 +50,7 @@ check() {
 package() {
   cd "$pkgname"
   install -Dm755 target/release/AndroidFiles "$pkgdir/usr/bin/androidfiles"
-  install -Dm644 androidfiles.desktop "$pkgdir/usr/share/applications/androidfiles.desktop"
+  install -Dm644 src/assets/androidfiles.desktop "$pkgdir/usr/share/applications/androidfiles.desktop"
   install -Dm644 src/assets/logo.png \
     "$pkgdir/usr/share/icons/hicolor/1024x1024/apps/androidfiles.png"
 }

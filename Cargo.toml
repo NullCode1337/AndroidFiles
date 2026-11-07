@@ -2,6 +2,9 @@
 name = "AndroidFiles"
 version = "0.1.0"
 edition = "2024"
+description = "Desktop file manager for Android devices over adb"
+repository = "https://github.com/NullCode1337/AndroidFiles"
+license = "GPL-3.0-only"
 
 [dependencies]
 gpui-kit = "=0.9.0"
@@ -16,7 +19,6 @@ chrono = { version = "0.4", features = ["serde"] }
 smol = "2"
 log = "0.4"
 env_logger = "0.11"
-cargo-deb = "3.8.0"
 
 [dev-dependencies]
 gpui-pre = { version = "=0.3.11", features = ["test-support"] }
@@ -36,12 +38,14 @@ codegen-units = 4
 [package.metadata.deb]
 maintainer = "NullCode1337 <contact.nullcode@proton.me>"
 copyright = "2026, NullCode1337"
-license-file = ["LICENSE", "4"]
+license-file = "LICENSE"
 extended-description = """
-A native desktop application built with GPUI in Rust.
+AndroidFiles is a desktop file manager for Android devices connected over adb.
+It allows for browsing, transfers, renaming, deleting, and selective backups.
 """
-depends = "$auto, libvulkan1, libx11-6, libxcb1, adb, fastboot"
+depends = "$auto, adb, fastboot, libegl1, libfontconfig1, libfreetype6, libvulkan1, libwayland-client0, libx11-6, libxcb1, libxkbcommon0, libxkbcommon-x11-0"
 assets = [
-    ["target/release/AndroidFiles", "usr/bin/AndroidFiles", "755"],
-    ["assets/*", "usr/share/AndroidFiles/assets/", "644"]
+    ["target/release/AndroidFiles", "usr/bin/androidfiles", "755"],
+    ["src/assets/androidfiles.desktop", "usr/share/applications/androidfiles.desktop", "644"],
+    ["src/assets/logo.png", "usr/share/icons/hicolor/1024x1024/apps/androidfiles.png", "644"]
 ]

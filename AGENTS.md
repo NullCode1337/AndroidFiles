@@ -18,6 +18,14 @@ cargo fmt && cargo clippy --all-targets -- -D warnings
 Always finish a change with the last line. Fix lints rather than adding
 `#[allow]`.
 
+Building the `.deb` requires the `cargo-deb` subcommand to be installed
+separately; it is not a crate dependency:
+
+```sh
+cargo install cargo-deb
+cargo deb
+```
+
 The dev profile optimizes dependencies (`opt-level = 3` under
 `[profile.dev.package."*"]`) because GPUI's layout, text shaping, and renderer
 live in dependencies and are unusably slow when unoptimized. Keep those
