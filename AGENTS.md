@@ -140,18 +140,19 @@ extends selection.
 
 ### Key bindings
 
-Bindings are registered in `AppView::new` with `cx.bind_keys` and dispatched by
-`on_action` handlers on the root element. Cmd/Ctrl pairs exist for macOS and
-Linux/Windows.
+Bindings are registered in `AppView::new` with `cx.bind_keys`, scoped to
+`KEY_CONTEXT`, and dispatched by `on_action` handlers on the root element.
+Cmd/Ctrl pairs exist for macOS and Linux/Windows. The root tracks
+`focus_handle` and takes focus in `new`, so the dispatch path always includes
+the handlers even when no child is focused. The context scope lets a focused
+input win on shared keys (delete, copy/cut/paste, alt-left/right) while
+app-only chords still fire.
 
 Settings, refresh, alt-up (navigate up), delete, copy/cut/paste, new folder
 (`shift-n`), new file (`n`), enter (rename), properties (`i`), hidden files and
 host pane (`shift-h`/`shift-b`), focus search (`f`), back/forward (alt-left/right).
 
-**Backspace is deliberately unbound.** GPUI resolves bindings last-added-first,
-and a global binding beats the focused input's context binding. Binding
-`backspace` to navigate-up made the toolbar search unable to delete
-characters. Keep it free; use alt-up.
+**Backspace is deliberately unbound.** Use alt-up to navigate up.
 
 ## GPUI and gpui-kit notes
 
@@ -186,7 +187,7 @@ migration on later files.
 Fields: `theme`, `window_controls`, `translucent_window`, `adb_path`,
 `scrcpy_path`, `concurrent_transfers`, `show_hidden`,
 `open_on_single_click`, `confirm_before_delete`, `default_download_folder`,
-`favorites`.
+`favorites`, `wireless_devices`.
 
 `concurrent_transfers` is persisted but not yet used by any code path.
 `scrcpy_path` overrides the binary launched by the toolbar screen-mirror
@@ -200,6 +201,24 @@ The library calls `connect()` — a fresh TCP connection, transport selection,
 and host-features round trip — for **every** command and sync transfer, so
 per-command cost is inherent; do not construct extra devices per command where
 one can be shared.
+
+Wireless debugging uses the adb server's `host:pair` and `host:connect`
+commands: `pair_wireless` takes the pairing address and code, and
+`connect_wireless` takes the address from the Wireless debugging screen.
+Both accept IPv4 `IP:port` only because adb_client uses `SocketAddrV4`.
+"Already paired" and "already connected" responses count as success. Pairing
+is a separate dialog with only the pairing IP, port, and code; it never asks
+for the connection address. The **Add wireless device** dialog lists saved
+hosts, fills the device IP from one, and connects with the device address and
+port shown on the Wireless debugging screen. Successful pairings and
+connections are saved in `wireless_devices`. Device listing collapses TCP
+transports sharing a host and, when `ro.serialno` matches, the USB and
+wireless transports for one phone, preferring a ready USB link. A row keeps
+the hidden wireless serial so its disconnect action works even when the USB
+transport is the one shown; `disconnect_wireless_serial` uses `host:disconnect`
+for `IP:port` serials and leaves the address paired. mDNS serials
+(`adb-…_adb-tls-connect._tcp`) cannot go through adb_client's
+`SocketAddrV4` API, so they are disconnected with `adb disconnect <serial>`.
 
 ### Shell commands
 
@@ -236,7 +255,9 @@ Cancel is an `AtomicBool`. Push does not follow directory symlinks (loops).
 Symlinks are skipped in tree scans, matching prior behavior.
 
 `pull_file`/`push_file` are the single-entry entry points used by the app and
-by `backup.rs`.
+by `backup.rs`. A failed pull keeps its transfer row in the failed state and
+also opens an alert dialog with the error; permission-denied gets its own
+title.
 
 `guard_delete` refuses mount roots, shared-storage roots, and a fixed list of
 system directories. Extend that list rather than relying on `rm -rf` failures.
@@ -282,6 +303,10 @@ for frame in /tmp/androidfiles*.ppm; do ffmpeg -loglevel error -y -i "$frame" "$
 | `/tmp/androidfiles_long_path.ppm` | 1100×700 | deep host path so the bar wraps |
 | `/tmp/androidfiles_settings.ppm` | 1120×720 | settings dialog |
 | `/tmp/androidfiles_properties.ppm` | 1120×720 | properties dialog, copyable values |
+| `/tmp/androidfiles_wireless.ppm` | 1120×720 | add wireless device dialog |
+| `/tmp/androidfiles_sidebar_devices.ppm` | 1120×720 | USB + wireless device rows, root shortcuts |
+| `/tmp/androidfiles_pair_wireless.ppm` | 1120×720 | standalone pairing dialog |
+| `/tmp/androidfiles_scrollbar.ppm` | 1120×720 | split panes with overflowing lists |
 
 `settings_button_opens_dialog` also asserts that clicking the toolbar gear
 activates a dialog, and captures after `HeadlessAppContext::advance_clock`
@@ -321,7 +346,8 @@ drops them.
 
 Covered: title-bar drag vs. toolbar press, divider drag, empty-device listing,
 sidebar routing to the highlighted pane, settings dialog, properties dialog,
-and backspace editing the search field.
+backspace/delete editing the search field, ctrl-shift-n opening a dialog,
+and the pane scrollbars.
 
 ### What a correct frame looks like
 
@@ -330,8 +356,12 @@ and backspace editing the search field.
 - Every pane has a path bar above its listing; the focused pane's bar is tinted
   and its crumbs navigate; crumbs wrap and never paint over the other pane.
 - Sidebar shortcuts target the highlighted pane.
+- Device Locations end with exactly `/` and `/sdcard`; `/sdcard` maps to
+  `/storage/emulated/0`. Device rows show the model (serial only as fallback).
 - List panes narrower than `COMPACT_LIST_WIDTH` (480 px) show Name and Size
   only; wider panes add Date Modified and Permissions.
+- Each pane overlays a slim scrollbar at its right edge, visible only while
+  that pane's content overflows.
 - Divider sits at `SIDEBAR_WIDTH + host_pane_width` with a 5 px grab band.
   Until dragged the split is equal and follows the window; afterwards the
   chosen width is clamped so the device pane keeps `MIN_DEVICE_PANE_WIDTH`.

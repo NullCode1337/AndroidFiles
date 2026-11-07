@@ -40,6 +40,7 @@ pub struct Settings {
     pub confirm_before_delete: bool,
     pub default_download_folder: String,
     pub favorites: Vec<Favorite>,
+    pub wireless_devices: Vec<String>,
 }
 
 impl Default for Settings {
@@ -62,6 +63,7 @@ impl Default for Settings {
             confirm_before_delete: true,
             default_download_folder,
             favorites: Vec::new(),
+            wireless_devices: Vec::new(),
         }
     }
 }

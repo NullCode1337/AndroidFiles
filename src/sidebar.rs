@@ -7,14 +7,14 @@ use chrono::Utc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::progress::Progress;
-use gpui_kit::component::{ActiveTheme, Icon, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use crate::app::AppView;
 use crate::appearance;
 use crate::format::{device_label, format_size, format_speed};
-use crate::model::{DeviceStateInfo, Side};
+use crate::model::Side;
 
 impl AppView {
     pub fn render_sidebar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -29,6 +29,28 @@ impl AppView {
         let this = cx.weak_entity();
 
         let host_active = self.show_host_pane && self.focused_side == Side::Host;
+        let add_wireless = cx.weak_entity();
+        let add_wireless_item = div()
+            .w_full()
+            .flex_none()
+            .px(px(8.))
+            .pb(px(8.))
+            .child(nav_row(
+                "add-wireless-device",
+                "Add wireless device",
+                IconName::Wifi,
+                NavRowColors {
+                    icon: primary,
+                    active,
+                    hover,
+                },
+                false,
+                move |_, window, cx| {
+                    add_wireless
+                        .update(cx, |this, cx| this.open_wireless_device_dialog(window, cx))
+                        .ok();
+                },
+            ));
 
         v_flex()
             .id("sidebar")
@@ -58,7 +80,8 @@ impl AppView {
                         },
                         self.focused_side == Side::Device
                             && self.selected_device.is_some()
-                            && self.device_cwd == "/sdcard",
+                            && (self.device_cwd == "/sdcard"
+                                || self.device_cwd == "/storage/emulated/0"),
                         {
                             let this = this.clone();
                             move |_, _, cx| {
@@ -93,27 +116,28 @@ impl AppView {
             .child(section_header("Locations", muted))
             .child(self.render_locations(cx, muted, active, hover))
             .when(self.devices.is_empty(), move |el| {
-                el.child(
-                    div().px(px(12.)).pt(px(4.)).child(
-                        Button::new("refresh-devices")
-                            .ghost()
-                            .compact()
-                            .label("Refresh devices")
-                            .icon(Icon::new(IconName::RefreshCw))
-                            .on_click({
-                                let this = this.clone();
-                                move |_, _, cx| {
-                                    this.update(cx, |this, cx| this.refresh_devices(cx)).ok();
-                                }
-                            }),
-                    ),
-                )
+                let refresh = this.clone();
+                el.child(div().px(px(8.)).pt(px(6.)).child(nav_row(
+                    "refresh-devices",
+                    "Refresh devices",
+                    IconName::RefreshCw,
+                    NavRowColors {
+                        icon: muted,
+                        active,
+                        hover,
+                    },
+                    false,
+                    move |_, _, cx| {
+                        refresh.update(cx, |this, cx| this.refresh_devices(cx)).ok();
+                    },
+                )))
             })
             .when(!self.transfers.is_empty(), move |el| {
                 el.child(section_header("Transfers", muted))
                     .child(self.render_transfers(cx))
             })
             .child(div().flex_1().min_h_0())
+            .child(add_wireless_item)
     }
 
     fn render_quick_locations(
@@ -253,68 +277,105 @@ impl AppView {
         hover: Hsla,
     ) -> impl IntoElement {
         let this = cx.weak_entity();
-        let success = cx.theme().success;
-        let warning = cx.theme().warning;
-        let danger = cx.theme().danger;
-        let info = cx.theme().info;
 
         let mut rows: Vec<AnyElement> = Vec::new();
 
         for device in &self.devices {
-            let dot = state_color(&device.state, success, warning, danger, muted, info);
             let serial = device.serial.clone();
             let label = device_label(&device.model, &device.serial);
+            let wireless = device.wireless_serial.clone();
+            let disconnect_name = if device.model.is_empty() {
+                serial.clone()
+            } else {
+                device.model.clone()
+            };
+            let select = this.clone();
+            let select_serial = serial.clone();
+            let disconnect = this.clone();
 
             rows.push(
                 h_flex()
                     .id(ElementId::from(format!("device-{}", device.serial)))
                     .w_full()
                     .h(px(26.))
+                    .flex_none()
+                    .overflow_hidden()
                     .px(px(8.))
-                    .gap(px(8.))
+                    .gap(px(4.))
                     .rounded(px(6.))
-                    .cursor_pointer()
                     .hover(move |s| s.bg(hover))
-                    .on_click({
-                        let this = this.clone();
-                        let serial = serial.clone();
-                        move |_, _, cx| {
-                            this.update(cx, |this, cx| this.select_device(serial.clone(), cx))
-                                .ok();
-                        }
-                    })
                     .child(
-                        div()
-                            .flex_none()
-                            .text_color(muted)
-                            .child(Icon::new(IconName::Smartphone).size(px(15.))),
-                    )
-                    .child(
-                        div()
+                        h_flex()
+                            .id(format!("device-select-{serial}"))
                             .flex_1()
                             .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .text_sm()
-                            .child(label),
+                            .items_center()
+                            .gap(px(8.))
+                            .cursor_pointer()
+                            .on_click(move |_, _, cx| {
+                                select
+                                    .update(cx, |this, cx| {
+                                        this.select_device(select_serial.clone(), cx)
+                                    })
+                                    .ok();
+                            })
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(muted)
+                                    .child(Icon::new(IconName::Smartphone).size(px(15.))),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .text_sm()
+                                    .child(label),
+                            ),
                     )
-                    .child(div().size(px(6.)).rounded_full().flex_none().bg(dot))
+                    .when_some(wireless, move |el, address| {
+                        el.child(
+                            Button::new(format!("disconnect-{serial}"))
+                                .ghost()
+                                .small()
+                                .rounded(px(6.))
+                                .w(px(22.))
+                                .h(px(22.))
+                                .icon(Icon::new(IconName::Trash).size(px(13.)))
+                                .tooltip("Disconnect")
+                                .on_click(move |_, window, cx| {
+                                    disconnect
+                                        .update(cx, |this, cx| {
+                                            this.confirm_disconnect_device(
+                                                address.clone(),
+                                                disconnect_name.clone(),
+                                                window,
+                                                cx,
+                                            )
+                                        })
+                                        .ok();
+                                }),
+                        )
+                    })
                     .into_any_element(),
             );
         }
 
-        for root in &self.storage_roots {
-            // `/sdcard` is already the "Internal storage" row above.
-            if root == "/sdcard" {
-                continue;
-            }
-            let label = root.rsplit('/').next().unwrap_or(root).to_string();
-            let path = root.clone();
-            let is_active = self.focused_side == Side::Device && self.device_cwd == *root;
+        for (id, label, path) in [
+            ("root", "/", "/"),
+            ("sdcard", "/sdcard", "/storage/emulated/0"),
+        ] {
+            let is_active = self.focused_side == Side::Device
+                && (self.device_cwd == path
+                    || (path == "/storage/emulated/0" && self.device_cwd == "/sdcard"));
             let this = this.clone();
+            let target = path.to_string();
             rows.push(
                 nav_row(
-                    format!("root-{root}"),
+                    format!("root-{id}"),
                     label,
                     IconName::HardDrive,
                     NavRowColors {
@@ -324,23 +385,11 @@ impl AppView {
                     },
                     is_active,
                     move |_, _, cx| {
-                        this.update(cx, |this, cx| this.navigate_device(path.clone(), cx))
+                        this.update(cx, |this, cx| this.navigate_device(target.clone(), cx))
                             .ok();
                     },
                 )
                 .into_any_element(),
-            );
-        }
-
-        if rows.is_empty() {
-            rows.push(
-                div()
-                    .px(px(10.))
-                    .py(px(2.))
-                    .text_xs()
-                    .text_color(muted)
-                    .child("No locations")
-                    .into_any_element(),
             );
         }
 
@@ -497,6 +546,7 @@ fn nav_row(
                 .min_w_0()
                 .overflow_hidden()
                 .text_ellipsis()
+                .whitespace_nowrap()
                 .text_sm()
                 .child(label.into()),
         )
@@ -528,25 +578,5 @@ fn host_shortcut_path(label: &str) -> PathBuf {
             .unwrap_or_else(|| home.join("Pictures"))
             .join("DCIM"),
         _ => home,
-    }
-}
-
-fn state_color(
-    state: &DeviceStateInfo,
-    success: Hsla,
-    warning: Hsla,
-    danger: Hsla,
-    muted: Hsla,
-    info: Hsla,
-) -> Hsla {
-    match state {
-        DeviceStateInfo::Connected => success,
-        DeviceStateInfo::Authorizing | DeviceStateInfo::Connecting => warning,
-        DeviceStateInfo::Unauthorized | DeviceStateInfo::NoPermissions => danger,
-        DeviceStateInfo::Offline | DeviceStateInfo::Detached | DeviceStateInfo::Other(_) => muted,
-        DeviceStateInfo::Bootloader
-        | DeviceStateInfo::Recovery
-        | DeviceStateInfo::Sideload
-        | DeviceStateInfo::Rescue => info,
     }
 }

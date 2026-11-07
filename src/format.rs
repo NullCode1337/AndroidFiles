@@ -52,6 +52,6 @@ pub fn device_label(model: &str, serial: &str) -> String {
     if model.is_empty() || model == serial {
         serial.to_string()
     } else {
-        format!("{model} · {serial}")
+        model.to_string()
     }
 }

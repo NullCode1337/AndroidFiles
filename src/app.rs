@@ -11,17 +11,19 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::InteractiveElementExt;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
+use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, Sizable, Theme, ThemeMode, VirtualListScrollHandle, h_flex,
+    ActiveTheme, Disableable, Icon, Sizable, Theme, ThemeMode, VirtualListScrollHandle, WindowExt,
+    h_flex,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use crate::actions::*;
 use crate::appearance;
-use crate::backend::adb::{AdbContext, remote_join};
+use crate::backend::adb::{AdbContext, is_wireless_serial, remote_join, wireless_host};
 use crate::backend::backup::{backup_device, default_options};
 use crate::backend::host;
 use crate::backend::polling::{PollEvent, spawn_poller};
@@ -32,6 +34,8 @@ use crate::model::{
     TransferDirection, TransferProgress,
 };
 use crate::settings::{Settings, ThemePref, WindowControlsPref};
+
+const KEY_CONTEXT: &str = "AndroidFiles";
 
 /// How file entries are laid out in a pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,7 +134,6 @@ pub struct AppView {
     pub(crate) device_cwd: String,
     device_entries: Vec<FileEntry>,
     pub(crate) device_loading: bool,
-    pub(crate) storage_roots: Vec<String>,
 
     pub(crate) selected: HashSet<String>,
     pub(crate) focused_side: Side,
@@ -160,6 +163,10 @@ pub struct AppView {
     pub(crate) host_scroll: VirtualListScrollHandle,
     pub(crate) device_scroll: VirtualListScrollHandle,
 
+    /// Keeps the view on the key-dispatch path when no child is focused.
+    focus_handle: FocusHandle,
+    /// Used by async failures that need to open a dialog.
+    window_handle: AnyWindowHandle,
     /// Live toolbar search; filters entries by name.
     pub(crate) search_input: Entity<InputState>,
     pub(crate) search: String,
@@ -187,6 +194,7 @@ impl AppView {
             .or_else(|| resolve_adb_binary(None));
         let host_cwd = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+        let window_handle = window.window_handle();
 
         let mut this = Self {
             settings,
@@ -199,7 +207,6 @@ impl AppView {
             device_cwd: "/sdcard".to_string(),
             device_entries: Vec::new(),
             device_loading: false,
-            storage_roots: Vec::new(),
             selected: HashSet::new(),
             focused_side: Side::Device,
             clipboard: None,
@@ -217,6 +224,8 @@ impl AppView {
             visible_cache: RefCell::new(VisibleCache::default()),
             host_scroll: VirtualListScrollHandle::new(),
             device_scroll: VirtualListScrollHandle::new(),
+            focus_handle: cx.focus_handle(),
+            window_handle,
             search_input,
             search: String::new(),
             _search_sub: None,
@@ -246,39 +255,40 @@ impl AppView {
         }));
 
         cx.bind_keys([
-            KeyBinding::new("cmd-,", OpenSettings, None),
-            KeyBinding::new("ctrl-,", OpenSettings, None),
-            KeyBinding::new("cmd-r", Refresh, None),
-            KeyBinding::new("ctrl-r", Refresh, None),
+            KeyBinding::new("cmd-,", OpenSettings, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-,", OpenSettings, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-r", Refresh, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-r", Refresh, Some(KEY_CONTEXT)),
             // Global bindings win over focused inputs, so backspace must stay
             // free or the search field cannot delete characters.
-            KeyBinding::new("alt-up", NavigateUp, None),
-            KeyBinding::new("delete", DeleteSelected, None),
-            KeyBinding::new("cmd-c", CopySelected, None),
-            KeyBinding::new("ctrl-c", CopySelected, None),
-            KeyBinding::new("cmd-x", CutSelected, None),
-            KeyBinding::new("ctrl-x", CutSelected, None),
-            KeyBinding::new("cmd-v", Paste, None),
-            KeyBinding::new("ctrl-v", Paste, None),
-            KeyBinding::new("cmd-shift-n", NewFolder, None),
-            KeyBinding::new("ctrl-shift-n", NewFolder, None),
-            KeyBinding::new("cmd-n", NewFile, None),
-            KeyBinding::new("ctrl-n", NewFile, None),
-            KeyBinding::new("enter", RenameSelected, None),
-            KeyBinding::new("cmd-i", ShowProperties, None),
-            KeyBinding::new("ctrl-i", ShowProperties, None),
-            KeyBinding::new("cmd-shift-h", ToggleHidden, None),
-            KeyBinding::new("cmd-shift-b", ToggleHostPane, None),
-            KeyBinding::new("ctrl-shift-h", ToggleHidden, None),
-            KeyBinding::new("ctrl-shift-b", ToggleHostPane, None),
-            KeyBinding::new("cmd-f", FocusSearch, None),
-            KeyBinding::new("ctrl-f", FocusSearch, None),
-            KeyBinding::new("alt-left", GoBack, None),
-            KeyBinding::new("alt-right", GoForward, None),
+            KeyBinding::new("alt-up", NavigateUp, Some(KEY_CONTEXT)),
+            KeyBinding::new("delete", DeleteSelected, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-c", CopySelected, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-c", CopySelected, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-x", CutSelected, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-x", CutSelected, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-v", Paste, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-v", Paste, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-shift-n", NewFolder, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-shift-n", NewFolder, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-n", NewFile, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-n", NewFile, Some(KEY_CONTEXT)),
+            KeyBinding::new("enter", RenameSelected, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-i", ShowProperties, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-i", ShowProperties, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-shift-h", ToggleHidden, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-shift-b", ToggleHostPane, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-shift-h", ToggleHidden, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-shift-b", ToggleHostPane, Some(KEY_CONTEXT)),
+            KeyBinding::new("cmd-f", FocusSearch, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-f", FocusSearch, Some(KEY_CONTEXT)),
+            KeyBinding::new("alt-left", GoBack, Some(KEY_CONTEXT)),
+            KeyBinding::new("alt-right", GoForward, Some(KEY_CONTEXT)),
         ]);
 
         this.spawn_poller(cx);
         this.load_host_dir(cx);
+        window.focus(&this.focus_handle, cx);
         this
     }
 
@@ -457,7 +467,6 @@ impl AppView {
                         self.device_back.clear();
                         self.device_forward.clear();
                         self.load_device_dir(cx);
-                        self.load_storage_roots(cx);
                     } else if !was_ready
                         && self
                             .selected_device_info()
@@ -465,7 +474,6 @@ impl AppView {
                     {
                         // Newly authorized: the listing failed before, so load it.
                         self.load_device_dir(cx);
-                        self.load_storage_roots(cx);
                     }
                     changed = true;
                 }
@@ -512,6 +520,214 @@ impl AppView {
         .detach();
     }
 
+    pub(crate) fn pair_wireless_device(
+        &mut self,
+        pairing: String,
+        code: String,
+        cx: &mut Context<Self>,
+    ) {
+        let adb_path = self.adb_path.clone();
+        let host = wireless_host(&pairing).to_string();
+        self.status_line = Some("Pairing wireless device…".to_string());
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let adb = AdbContext::new(adb_path);
+                    adb.start_server();
+                    adb.pair_wireless(&pairing, &code)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(()) => {
+                        this.remember_wireless_host(&host);
+                        this.status_line = Some(format!(
+                            "Paired with {host}. Open Add wireless device and enter the device address and port shown on the Wireless debugging screen."
+                        ));
+                    }
+                    Err(error) => {
+                        this.status_line =
+                            Some(format!("Couldn't pair wireless device: {error}"));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn connect_wireless_device(&mut self, connect: String, cx: &mut Context<Self>) {
+        let host = wireless_host(&connect).to_string();
+        if let Some(serial) = self
+            .devices
+            .iter()
+            .find(|device| {
+                device.state.is_ready() && wireless_host(&device.serial) == host.as_str()
+            })
+            .map(|device| device.serial.clone())
+        {
+            self.select_device(serial.clone(), cx);
+            self.status_line = Some(format!("Already connected to {serial}."));
+            cx.notify();
+            return;
+        }
+
+        let adb_path = self.adb_path.clone();
+        let serial = connect.clone();
+        self.status_line = Some("Connecting wireless device…".to_string());
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let adb = AdbContext::new(adb_path);
+                    adb.start_server();
+                    let already = adb.ready_wireless_transport(&host)?;
+                    if already.is_none() {
+                        adb.connect_wireless(&connect)
+                            .map_err(|error| format!("connection failed: {error}"))?;
+                    }
+                    let devices = adb.list_device_infos()?;
+                    let raw_listed = adb
+                        .list_devices()?
+                        .iter()
+                        .any(|device| device.identifier == connect);
+                    Ok::<_, String>((devices, raw_listed, already))
+                })
+                .await;
+            this.update(cx, |this, cx| match result {
+                Ok((devices, raw_listed, already)) => {
+                    let listed = devices.iter().any(|device| device.serial == serial);
+                    this.handle_poll_event(PollEvent::Devices(devices), cx);
+                    this.remember_wireless_device(&serial);
+                    if listed {
+                        this.select_device(serial.clone(), cx);
+                        this.status_line = Some(format!("Wireless device {serial} connected."));
+                    } else if let Some(existing) = already {
+                        this.status_line = Some(format!("Already connected to {existing}."));
+                    } else if raw_listed {
+                        this.status_line = Some(format!(
+                            "Connected to {serial}; using the existing connection for this device."
+                        ));
+                    } else {
+                        this.status_line = Some(format!(
+                            "Connected to {serial}, but it is not listed yet. Refresh devices."
+                        ));
+                    }
+                    cx.notify();
+                }
+                Err(error) => {
+                    this.status_line = Some(format!("Couldn't connect wireless device: {error}"));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn confirm_disconnect_device(
+        &mut self,
+        address: String,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !is_wireless_serial(&address) {
+            self.status_line = Some("No wireless connection to disconnect.".to_string());
+            cx.notify();
+            return;
+        }
+        let this = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            alert
+                .title(format!("Disconnect \"{name}\"?"))
+                .description(
+                    "This removes the wireless ADB connection. The device stays paired and can be reconnected from Add wireless device.",
+                )
+                .confirm()
+                .ok_text("Disconnect")
+                .ok_variant(ButtonVariant::Danger)
+                .cancel_text("Cancel")
+                .centered()
+                .entrance(DialogEntrance::FadeSlide)
+                .on_ok({
+                    let this = this.clone();
+                    let address = address.clone();
+                    move |_, _, cx| {
+                        this.update(cx, |this, cx| {
+                            this.disconnect_device(address.clone(), cx)
+                        })
+                        .ok();
+                        true
+                    }
+                })
+        });
+    }
+
+    fn disconnect_device(&mut self, serial: String, cx: &mut Context<Self>) {
+        let adb_path = self.adb_path.clone();
+        let shown = serial.clone();
+        self.status_line = Some(format!("Disconnecting {serial}…"));
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let adb = AdbContext::new(adb_path);
+                    adb.disconnect_wireless_serial(&serial)?;
+                    adb.list_device_infos()
+                })
+                .await;
+            this.update(cx, |this, cx| match result {
+                Ok(devices) => {
+                    this.handle_poll_event(PollEvent::Devices(devices), cx);
+                    this.status_line = Some(format!("Disconnected {shown}."));
+                    cx.notify();
+                }
+                Err(error) => {
+                    this.status_line = Some(format!("Couldn't disconnect {shown}: {error}"));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn remember_wireless_host(&mut self, host: &str) {
+        if self
+            .settings
+            .wireless_devices
+            .iter()
+            .any(|saved| wireless_host(saved) == host)
+        {
+            return;
+        }
+        self.settings.wireless_devices.push(host.to_string());
+        let _ = self.settings.save();
+    }
+
+    fn remember_wireless_device(&mut self, address: &str) {
+        let host = wireless_host(address);
+        let existing = self
+            .settings
+            .wireless_devices
+            .iter()
+            .position(|saved| wireless_host(saved) == host);
+        match existing {
+            Some(ix) if self.settings.wireless_devices[ix] == address => return,
+            Some(ix) => self.settings.wireless_devices[ix] = address.to_string(),
+            None => self.settings.wireless_devices.push(address.to_string()),
+        }
+        let _ = self.settings.save();
+    }
+
     pub(crate) fn select_device(&mut self, serial: String, cx: &mut Context<Self>) {
         if self.selected_device.as_deref() == Some(&serial) {
             return;
@@ -523,7 +739,6 @@ impl AppView {
         self.focused_side = Side::Device;
         self.selected.clear();
         self.load_device_dir(cx);
-        self.load_storage_roots(cx);
         cx.notify();
     }
 
@@ -631,35 +846,6 @@ impl AppView {
                     }
                 }
                 this.bump_entries();
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn load_storage_roots(&mut self, cx: &mut Context<Self>) {
-        let Some(serial) = self.selected_device.clone() else {
-            self.storage_roots.clear();
-            return;
-        };
-        let adb_path = self.adb_path.clone();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let adb = AdbContext::new(adb_path);
-                    let dirs = adb.list_dir(&serial, "/storage")?;
-                    Ok::<Vec<String>, String>(
-                        dirs.iter()
-                            .filter(|e| e.is_dir())
-                            .map(|e| e.path.clone())
-                            .collect(),
-                    )
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                this.storage_roots = result.unwrap_or_default();
                 cx.notify();
             })
             .ok();
@@ -1345,6 +1531,7 @@ impl AppView {
             return;
         };
         let adb_path = self.adb_path.clone();
+        let window_handle = self.window_handle;
         for remote in remote_paths {
             let name = remote
                 .rsplit('/')
@@ -1354,6 +1541,7 @@ impl AppView {
                 .to_string();
             let local_full = local_dest.join(&name);
             let id = self.next_transfer_id();
+            let dialog_name = name.clone();
             self.pull_transfer(id, name);
 
             let serial = serial.clone();
@@ -1386,18 +1574,25 @@ impl AppView {
                     }
                 };
                 let (result, _) = smol::future::zip(task, progress_loop).await;
+                let failure = result.as_ref().err().cloned();
                 this.update(cx, |this, cx| {
                     if let Some(t) = this.transfers.iter_mut().find(|t| t.id == id) {
                         t.done = true;
-                        if let Err(e) = result {
+                        if let Some(error) = &failure {
                             t.failed = true;
-                            t.error = Some(e);
+                            t.error = Some(error.clone());
                         }
                         cx.notify();
                     }
                     this.load_host_dir(cx);
                 })
                 .ok();
+                if let Some(error) = failure {
+                    cx.update_window(window_handle, move |_, window, cx| {
+                        crate::dialogs::open_pull_error_dialog(window, cx, &dialog_name, &error);
+                    })
+                    .ok();
+                }
             })
             .detach();
         }
@@ -1910,7 +2105,10 @@ impl AppView {
             format!("{count} of {total} shown")
         };
 
-        let state = self.selected_device_info().map(|d| d.state.clone());
+        let state = self
+            .selected_device_info()
+            .map(|device| device.state.clone())
+            .filter(|state| !state.is_ready());
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
         let status = self.status_line.clone().or_else(|| self.error.clone());
@@ -1980,9 +2178,9 @@ impl AppView {
             serial: "DEMO123".into(),
             model: "Pixel 8".into(),
             state: DeviceStateInfo::Connected,
+            wireless_serial: None,
         }];
         self.selected_device = Some("DEMO123".into());
-        self.storage_roots = vec!["/sdcard".into()];
         self.device_loading = false;
         self.error = None;
 
@@ -2102,6 +2300,8 @@ impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("root")
+            .key_context(KEY_CONTEXT)
+            .track_focus(&self.focus_handle)
             .size_full()
             .flex()
             .flex_col()

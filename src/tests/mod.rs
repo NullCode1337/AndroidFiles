@@ -106,6 +106,170 @@ fn settings_button_opens_dialog() {
 
 /// Every value sits in a borderless read-only input.
 #[test]
+fn wireless_device_dialog_opens() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.wireless".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, _| {
+        view.load_demo_snapshot_state();
+        view.settings.wireless_devices = vec!["192.168.1.42:37123".into()];
+    });
+
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, cx| view.open_wireless_device_dialog(window, cx));
+        assert!(
+            window.has_active_dialog(cx),
+            "the wireless device dialog becomes active"
+        );
+        window.refresh();
+        window.draw(cx).clear(cx);
+    })
+    .expect("render wireless dialog");
+
+    cx.advance_clock(std::time::Duration::from_millis(300));
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    })
+    .expect("render settled wireless dialog");
+
+    let image = cx.capture_screenshot(handle).expect("capture wireless");
+    let (width, height) = image.dimensions();
+    let mut out =
+        std::fs::File::create("/tmp/androidfiles_wireless.ppm").expect("create wireless snapshot");
+    write!(out, "P6\n{width} {height}\n255\n").expect("header");
+    for pixel in image.pixels() {
+        out.write_all(&[pixel[0], pixel[1], pixel[2]])
+            .expect("pixel");
+    }
+    out.flush().expect("flush");
+}
+
+#[test]
+fn pull_error_opens_a_dialog() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, _view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.pull-error".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+
+    cx.update_window(handle, |_, window, cx| {
+        crate::dialogs::open_pull_error_dialog(window, cx, "photo.jpg", "Permission denied");
+        assert!(
+            window.has_active_dialog(cx),
+            "a failed pull opens an error dialog"
+        );
+    })
+    .expect("open pull error dialog");
+}
+
+#[test]
+fn pair_wireless_device_dialog_opens() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.pair-wireless".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, _| view.load_demo_snapshot_state());
+
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            view.open_pair_wireless_device_dialog(window, cx)
+        });
+        assert!(
+            window.has_active_dialog(cx),
+            "the pairing dialog becomes active"
+        );
+        window.refresh();
+        window.draw(cx).clear(cx);
+    })
+    .expect("render pairing dialog");
+
+    cx.advance_clock(std::time::Duration::from_millis(300));
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    })
+    .expect("render settled pairing dialog");
+
+    let image = cx.capture_screenshot(handle).expect("capture pairing");
+    let (width, height) = image.dimensions();
+    let mut out = std::fs::File::create("/tmp/androidfiles_pair_wireless.ppm")
+        .expect("create pairing snapshot");
+    write!(out, "P6\n{width} {height}\n255\n").expect("header");
+    for pixel in image.pixels() {
+        out.write_all(&[pixel[0], pixel[1], pixel[2]])
+            .expect("pixel");
+    }
+    out.flush().expect("flush");
+}
+
+#[test]
 fn properties_dialog_text_is_copyable() {
     let mut cx = HeadlessAppContext::with_platform(
         gpui_kit::platform::current_platform(true).text_system(),
@@ -157,6 +321,218 @@ fn properties_dialog_text_is_copyable() {
     let (width, height) = image.dimensions();
     let mut out = std::fs::File::create("/tmp/androidfiles_properties.ppm")
         .expect("create properties snapshot");
+    write!(out, "P6\n{width} {height}\n255\n").expect("header");
+    for pixel in image.pixels() {
+        out.write_all(&[pixel[0], pixel[1], pixel[2]])
+            .expect("pixel");
+    }
+    out.flush().expect("flush");
+}
+
+#[test]
+fn ctrl_shift_n_opens_new_folder_dialog() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.new-folder-key".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, _| view.load_demo_snapshot_state());
+
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+        let focus = view.read(cx).search_input.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        window.dispatch_keystroke(Keystroke::parse("ctrl-shift-n").unwrap(), cx);
+        assert!(
+            window.has_active_dialog(cx),
+            "ctrl-shift-n should open the new folder dialog"
+        );
+    })
+    .expect("dispatch ctrl-shift-n");
+}
+
+/// The delete key belongs to the search field while it is focused.
+#[test]
+fn delete_key_does_not_reach_file_actions_from_search() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.delete-key".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, _| view.load_demo_snapshot_state());
+
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+        let focus = view.read(cx).search_input.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        window.dispatch_keystroke(Keystroke::parse("delete").unwrap(), cx);
+        assert!(
+            !window.has_active_dialog(cx),
+            "delete in the search field must not delete the selected file"
+        );
+    })
+    .expect("dispatch delete");
+}
+
+#[test]
+fn sidebar_handles_usb_and_wireless_devices() {
+    use crate::model::{DeviceInfo, DeviceStateInfo};
+
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.sidebar-devices".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, _| {
+        view.load_demo_snapshot_state();
+        let serial = "adb-RFAX41Q89WZ-GDeqAX._adb-tls-connect._tcp";
+        view.devices = vec![DeviceInfo {
+            serial: serial.into(),
+            model: "SM-R940".into(),
+            state: DeviceStateInfo::Connected,
+            wireless_serial: Some(serial.into()),
+        }];
+        view.selected_device = Some(serial.into());
+    });
+
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    })
+    .expect("render sidebar");
+
+    let image = cx.capture_screenshot(handle).expect("capture sidebar");
+    let (width, height) = image.dimensions();
+    let mut out = std::fs::File::create("/tmp/androidfiles_sidebar_devices.ppm")
+        .expect("create sidebar snapshot");
+    write!(out, "P6\n{width} {height}\n255\n").expect("header");
+    for pixel in image.pixels() {
+        out.write_all(&[pixel[0], pixel[1], pixel[2]])
+            .expect("pixel");
+    }
+    out.flush().expect("flush");
+}
+
+#[test]
+fn panes_show_scrollbars_for_overflowing_lists() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.scrollbar".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, _| {
+        view.load_large_demo_state(200);
+        view.show_host_pane = true;
+    });
+
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+        view.update(cx, |view, _| {
+            view.device_scroll.set_offset(point(px(0.), px(-80.)));
+        });
+        window.refresh();
+        window.draw(cx).clear(cx);
+    })
+    .expect("scroll the device pane");
+
+    cx.advance_clock(std::time::Duration::from_millis(300));
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    })
+    .expect("render scrollbar");
+
+    let image = cx.capture_screenshot(handle).expect("capture scrollbar");
+    let (width, height) = image.dimensions();
+    let mut out = std::fs::File::create("/tmp/androidfiles_scrollbar.ppm")
+        .expect("create scrollbar snapshot");
     write!(out, "P6\n{width} {height}\n255\n").expect("header");
     for pixel in image.pixels() {
         out.write_all(&[pixel[0], pixel[1], pixel[2]])

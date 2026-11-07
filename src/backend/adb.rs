@@ -21,6 +21,26 @@ fn default_socket() -> SocketAddrV4 {
     SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 5037)
 }
 
+pub fn parse_wireless_address(address: &str) -> Result<SocketAddrV4, String> {
+    let address = address.trim();
+    address.parse().map_err(|_| {
+        format!("Enter an IPv4 address and port, like 192.168.1.42:5555 (got \"{address}\")")
+    })
+}
+
+pub fn wireless_host(address: &str) -> &str {
+    address
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(address)
+}
+
+pub fn is_wireless_serial(serial: &str) -> bool {
+    serial.contains(':')
+        || serial.contains("_adb-tls-connect._tcp")
+        || serial.contains("_adb-tls-pairing._tcp")
+}
+
 pub fn remote_join(parent: &str, name: &str) -> String {
     if parent.ends_with('/') {
         format!("{parent}{name}")
@@ -115,28 +135,181 @@ impl AdbContext {
 
     pub fn list_device_infos(&self) -> Result<Vec<DeviceInfo>, String> {
         let shorts = self.list_devices()?;
-        let mut out = Vec::with_capacity(shorts.len());
+        // One phone can have several TCP transports after reconnecting. Keep
+        // one per host, preferring the ready transport, so the sidebar does
+        // not grow duplicate rows for the same address.
+        let mut unique: Vec<DeviceShort> = Vec::with_capacity(shorts.len());
         for short in shorts {
-            let state = map_state(&short.state);
-            let model = self
-                .getprop(&short.identifier, "ro.product.model")
-                .filter(|m| !m.is_empty())
-                .unwrap_or_else(|| short.identifier.clone());
-            out.push(DeviceInfo {
-                serial: short.identifier,
-                model,
-                state,
-            });
+            if short.identifier.contains(':') {
+                let host = wireless_host(&short.identifier).to_string();
+                if let Some(existing) = unique
+                    .iter_mut()
+                    .find(|device| wireless_host(&device.identifier) == host)
+                {
+                    if map_state(&short.state).is_ready() && !map_state(&existing.state).is_ready()
+                    {
+                        *existing = short;
+                    }
+                    continue;
+                }
+            }
+            unique.push(short);
         }
-        Ok(out)
+
+        let mut infos = Vec::with_capacity(unique.len());
+        for short in unique {
+            let state = map_state(&short.state);
+            let (model, hardware) = self.device_identity(&short.identifier);
+            infos.push((
+                DeviceInfo {
+                    serial: short.identifier,
+                    model,
+                    state,
+                    wireless_serial: None,
+                },
+                hardware,
+            ));
+        }
+
+        let mut wireless_by_hardware = HashMap::new();
+        for (info, hardware) in &infos {
+            if is_wireless_serial(&info.serial)
+                && let Some(hardware) = hardware
+            {
+                wireless_by_hardware
+                    .entry(hardware.clone())
+                    .or_insert_with(|| info.serial.clone());
+            }
+        }
+
+        // The same phone can also arrive over USB and wireless at once. Keep
+        // one transport per hardware serial, preferring a ready USB link.
+        let mut out: Vec<(DeviceInfo, Option<String>)> = Vec::with_capacity(infos.len());
+        for (mut info, hardware) in infos {
+            info.wireless_serial = if is_wireless_serial(&info.serial) {
+                Some(info.serial.clone())
+            } else {
+                hardware
+                    .as_ref()
+                    .and_then(|hardware| wireless_by_hardware.get(hardware).cloned())
+            };
+            if let Some(hardware_ref) = hardware.as_deref()
+                && let Some(ix) = out
+                    .iter()
+                    .position(|(_, existing)| existing.as_deref() == Some(hardware_ref))
+            {
+                let existing = &out[ix].0;
+                let prefer_new = (info.state.is_ready() && !existing.state.is_ready())
+                    || (info.state.is_ready() == existing.state.is_ready()
+                        && !info.serial.contains(':')
+                        && existing.serial.contains(':'));
+                if prefer_new {
+                    out[ix] = (info, Some(hardware_ref.to_string()));
+                }
+                continue;
+            }
+            out.push((info, hardware));
+        }
+        Ok(out.into_iter().map(|(info, _)| info).collect())
     }
 
-    pub fn getprop(&self, serial: &str, prop: &str) -> Option<String> {
-        self.shell_stdout(serial, &format!("getprop {prop}")).ok()
+    fn device_identity(&self, serial: &str) -> (String, Option<String>) {
+        let out = self
+            .shell_stdout(serial, "getprop ro.product.model; getprop ro.serialno")
+            .unwrap_or_default();
+        let mut lines = out.lines();
+        let model = lines.next().unwrap_or_default().trim().to_string();
+        let hardware = lines.next().unwrap_or_default().trim().to_string();
+        let model = if model.is_empty() {
+            serial.to_string()
+        } else {
+            model
+        };
+        let hardware = (hardware != "unknown")
+            .then_some(hardware)
+            .filter(|h| !h.is_empty());
+        (model, hardware)
     }
 
     pub fn start_server(&self) {
         ADBServer::start(&Default::default(), &self.adb_path);
+    }
+
+    pub fn pair_wireless(&self, address: &str, code: &str) -> Result<(), String> {
+        let address = parse_wireless_address(address)?;
+        let mut server = self.server();
+        match server.pair(address, code.trim().to_string()) {
+            Ok(()) => Ok(()),
+            // Re-pairing an address the server already knows is not a failure.
+            Err(error) if error.to_string().to_lowercase().contains("already paired") => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    pub fn ready_wireless_transport(&self, host: &str) -> Result<Option<String>, String> {
+        let shorts = self.list_devices()?;
+        Ok(shorts
+            .into_iter()
+            .find(|device| {
+                device.identifier.contains(':')
+                    && wireless_host(&device.identifier) == host
+                    && map_state(&device.state).is_ready()
+            })
+            .map(|device| device.identifier))
+    }
+
+    pub fn connect_wireless(&self, address: &str) -> Result<(), String> {
+        let address = parse_wireless_address(address)?;
+        let mut server = self.server();
+        match server.connect_device(address) {
+            Ok(()) => Ok(()),
+            Err(error)
+                if error
+                    .to_string()
+                    .to_lowercase()
+                    .contains("already connected") =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    pub fn disconnect_wireless_serial(&self, serial: &str) -> Result<(), String> {
+        if !serial.contains(':') {
+            // adb_client's disconnect takes a SocketAddrV4, but the CLI
+            // accepts mDNS serials such as "..._adb-tls-connect._tcp".
+            return self.disconnect_with_cli(serial);
+        }
+
+        let address = parse_wireless_address(serial)?;
+        let mut server = self.server();
+        match server.disconnect_device(address) {
+            Ok(()) => Ok(()),
+            Err(error) if error.to_string().to_lowercase().contains("no such device") => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn disconnect_with_cli(&self, serial: &str) -> Result<(), String> {
+        let output = std::process::Command::new(self.adb_path.as_deref().unwrap_or("adb"))
+            .arg("disconnect")
+            .arg(serial)
+            .output()
+            .map_err(|error| error.to_string())?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if text.contains("disconnected")
+            || text.to_lowercase().contains("no such device")
+            || output.status.success()
+        {
+            Ok(())
+        } else {
+            Err(text.trim().to_string())
+        }
     }
 
     pub fn shell_stdout(&self, serial: &str, cmd: &str) -> Result<String, String> {
@@ -659,5 +832,27 @@ fn map_state(state: &DeviceState) -> DeviceStateInfo {
         DeviceState::Sideload => DeviceStateInfo::Sideload,
         DeviceState::Rescue => DeviceStateInfo::Rescue,
         DeviceState::NoDevice | DeviceState::Host => DeviceStateInfo::Other(state.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wireless_addresses_need_ipv4_and_port() {
+        assert_eq!(
+            parse_wireless_address(" 192.168.1.42:5555 ").unwrap(),
+            "192.168.1.42:5555".parse().unwrap()
+        );
+        assert!(parse_wireless_address("192.168.1.42").is_err());
+        assert!(parse_wireless_address("not an address").is_err());
+        assert_eq!(wireless_host("192.168.1.42:37123"), "192.168.1.42");
+        assert_eq!(wireless_host("192.168.1.42"), "192.168.1.42");
+        assert!(is_wireless_serial("192.168.1.42:37123"));
+        assert!(is_wireless_serial(
+            "adb-RFAX41Q89WZ-GDeqAX._adb-tls-connect._tcp"
+        ));
+        assert!(!is_wireless_serial("R5CT1234567"));
     }
 }

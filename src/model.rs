@@ -48,6 +48,8 @@ pub struct DeviceInfo {
     pub serial: String,
     pub model: String,
     pub state: DeviceStateInfo,
+    /// Wireless transport for this hardware, when it is hidden behind a USB row.
+    pub wireless_serial: Option<String>,
 }
 
 /// High-level device state.

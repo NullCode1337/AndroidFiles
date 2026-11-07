@@ -3,15 +3,18 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use crate::app::AppView;
 use crate::appearance;
+use crate::backend::adb::{parse_wireless_address, wireless_host};
 use crate::format::{format_date, format_mode, format_size};
 use crate::model::{EntryKind, Side};
 use crate::settings::{ThemePref, WindowControlsPref};
@@ -207,6 +210,398 @@ impl Render for SettingsView {
     }
 }
 
+struct WirelessView {
+    app: WeakEntity<AppView>,
+    address: Entity<InputState>,
+    port: Entity<InputState>,
+    error: Option<SharedString>,
+    selected_host: Option<String>,
+}
+
+impl WirelessView {
+    fn new(
+        app: WeakEntity<AppView>,
+        address: Entity<InputState>,
+        port: Entity<InputState>,
+    ) -> Self {
+        Self {
+            app,
+            address,
+            port,
+            error: None,
+            selected_host: None,
+        }
+    }
+
+    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let address = self.address.read(cx).value().trim().to_string();
+        let port = self.port.read(cx).value().trim().to_string();
+
+        if address.is_empty() || port.is_empty() {
+            self.error = Some("Enter the device address and port.".into());
+            cx.notify();
+            return;
+        }
+        let connect = format!("{address}:{port}");
+        if let Err(error) = parse_wireless_address(&connect) {
+            self.error = Some(error.into());
+            cx.notify();
+            return;
+        }
+
+        self.app
+            .update(cx, |app, cx| app.connect_wireless_device(connect, cx))
+            .ok();
+        window.close_dialog(cx);
+    }
+
+    fn select_host(&mut self, address: String, window: &mut Window, cx: &mut Context<Self>) {
+        let host = wireless_host(&address).to_string();
+        let port = address.rsplit_once(':').map(|(_, port)| port);
+        self.address
+            .update(cx, |state, cx| state.set_value(host.clone(), window, cx));
+        if let Some(port) = port
+            && !port.is_empty()
+            && self.port.read(cx).value().trim().is_empty()
+        {
+            self.port.update(cx, |state, cx| {
+                state.set_value(port.to_string(), window, cx)
+            });
+        }
+        self.selected_host = Some(host.clone());
+        self.app
+            .update(cx, |app, cx| {
+                if let Some(serial) = app
+                    .devices
+                    .iter()
+                    .find(|device| {
+                        device.serial == address || wireless_host(&device.serial) == host
+                    })
+                    .map(|device| device.serial.clone())
+                {
+                    app.select_device(serial, cx);
+                }
+            })
+            .ok();
+        cx.notify();
+    }
+
+    fn paired_addresses(&self, cx: &App) -> Vec<String> {
+        self.app
+            .read_with(cx, |app, _| {
+                let mut addresses = app.settings.wireless_devices.clone();
+                for device in &app.devices {
+                    if !device.serial.contains(':') {
+                        continue;
+                    }
+                    let host = wireless_host(&device.serial);
+                    if let Some(saved) = addresses
+                        .iter_mut()
+                        .find(|saved| wireless_host(saved) == host)
+                    {
+                        *saved = device.serial.clone();
+                    } else {
+                        addresses.push(device.serial.clone());
+                    }
+                }
+                addresses
+            })
+            .unwrap_or_default()
+    }
+}
+
+impl Render for WirelessView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let muted = cx.theme().muted_foreground;
+        let danger = cx.theme().danger;
+        let hover = cx.theme().list_hover;
+        let active = cx.theme().list_active;
+        let this = cx.weak_entity();
+        let addresses = self.paired_addresses(cx);
+
+        let paired = if addresses.is_empty() {
+            div()
+                .px(px(8.))
+                .py(px(6.))
+                .text_xs()
+                .text_color(muted)
+                .child("No paired devices yet.")
+                .into_any_element()
+        } else {
+            v_flex()
+                .gap(px(1.))
+                .children(addresses.into_iter().map(|address| {
+                    let host = wireless_host(&address).to_string();
+                    let selected = self.selected_host.as_deref() == Some(host.as_str());
+                    let row = h_flex()
+                        .id(format!("wireless-paired-{host}"))
+                        .w_full()
+                        .h(px(32.))
+                        .px(px(8.))
+                        .gap(px(8.))
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .child(
+                            Icon::new(IconName::Smartphone)
+                                .size(px(15.))
+                                .text_color(muted),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .text_sm()
+                                .child(host),
+                        )
+                        .when(selected, |el| el.bg(active))
+                        .when(!selected, move |el| el.hover(move |s| s.bg(hover)));
+                    row.on_click({
+                        let this = this.clone();
+                        move |_, window, cx| {
+                            this.update(cx, |this, cx| {
+                                this.select_host(address.clone(), window, cx)
+                            })
+                            .ok();
+                        }
+                    })
+                    .into_any_element()
+                }))
+                .into_any_element()
+        };
+
+        v_flex()
+            .gap_3()
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(muted)
+                            .child("Paired devices"),
+                    )
+                    .child(paired),
+            )
+            .child(
+                h_flex().justify_start().child(
+                    Button::new("wireless-new-pair")
+                        .ghost()
+                        .compact()
+                        .label("Pair a new device")
+                        .icon(Icon::new(IconName::Plus))
+                        .on_click({
+                            let app = self.app.clone();
+                            move |_, window, cx| {
+                                window.close_dialog(cx);
+                                app.update(cx, |app, cx| {
+                                    app.open_pair_wireless_device_dialog(window, cx)
+                                })
+                                .ok();
+                            }
+                        }),
+                ),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Device address"),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(div().flex_1().min_w_0().child(Input::new(&self.address)))
+                            .child(div().w(px(110.)).flex_none().child(Input::new(&self.port))),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child("The address and port shown on the Wireless debugging screen."),
+                    ),
+            )
+            .when_some(self.error.clone(), |el, error| {
+                el.child(div().text_xs().text_color(danger).child(error))
+            })
+            .child(
+                h_flex()
+                    .justify_end()
+                    .gap_2()
+                    .pt_2()
+                    .child(
+                        Button::new("wireless-cancel")
+                            .ghost()
+                            .label("Cancel")
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        Button::new("wireless-connect")
+                            .primary()
+                            .label("Connect")
+                            .on_click({
+                                let this = this;
+                                move |_, window, cx| {
+                                    this.update(cx, |this, cx| this.submit(window, cx)).ok();
+                                }
+                            }),
+                    ),
+            )
+    }
+}
+
+struct PairWirelessView {
+    app: WeakEntity<AppView>,
+    address: Entity<InputState>,
+    port: Entity<InputState>,
+    code: Entity<InputState>,
+    error: Option<SharedString>,
+}
+
+impl PairWirelessView {
+    fn new(
+        app: WeakEntity<AppView>,
+        address: Entity<InputState>,
+        port: Entity<InputState>,
+        code: Entity<InputState>,
+    ) -> Self {
+        Self {
+            app,
+            address,
+            port,
+            code,
+            error: None,
+        }
+    }
+
+    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let address = self.address.read(cx).value().trim().to_string();
+        let port = self.port.read(cx).value().trim().to_string();
+        let code = self.code.read(cx).value().trim().to_string();
+
+        if address.is_empty() || port.is_empty() {
+            self.error = Some("Enter the pairing address and port.".into());
+            cx.notify();
+            return;
+        }
+        let pairing = format!("{address}:{port}");
+        if let Err(error) = parse_wireless_address(&pairing) {
+            self.error = Some(error.into());
+            cx.notify();
+            return;
+        }
+        if code.is_empty() {
+            self.error = Some("Enter the pairing code shown on the phone.".into());
+            cx.notify();
+            return;
+        }
+
+        self.app
+            .update(cx, |app, cx| app.pair_wireless_device(pairing, code, cx))
+            .ok();
+        window.close_dialog(cx);
+    }
+}
+
+impl Render for PairWirelessView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let muted = cx.theme().muted_foreground;
+        let danger = cx.theme().danger;
+        let this = cx.weak_entity();
+
+        v_flex()
+            .gap_3()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("On the phone, open Wireless debugging and choose \u{201c}Pair device with pairing code\u{201d}. Enter only the address, port, and code shown in that pairing dialog."),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Pairing address"),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(div().flex_1().min_w_0().child(Input::new(&self.address)))
+                            .child(
+                                div()
+                                    .w(px(110.))
+                                    .flex_none()
+                                    .child(Input::new(&self.port)),
+                            ),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Pairing code"),
+                    )
+                    .child(Input::new(&self.code)),
+            )
+            .when_some(self.error.clone(), |el, error| {
+                el.child(div().text_xs().text_color(danger).child(error))
+            })
+            .child(
+                h_flex()
+                    .justify_end()
+                    .gap_2()
+                    .pt_2()
+                    .child(
+                        Button::new("pair-wireless-cancel")
+                            .ghost()
+                            .label("Cancel")
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        Button::new("pair-wireless-submit")
+                            .primary()
+                            .label("Pair")
+                            .on_click({
+                                let this = this;
+                                move |_, window, cx| {
+                                    this.update(cx, |this, cx| this.submit(window, cx))
+                                        .ok();
+                                }
+                            }),
+                    ),
+            )
+    }
+}
+
+pub fn open_pull_error_dialog(window: &mut Window, cx: &mut App, name: &str, error: &str) {
+    let name = name.to_string();
+    let error = error.to_string();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        let title = if error.to_lowercase().contains("permission denied") {
+            format!("Permission denied for \"{name}\"")
+        } else {
+            format!("Couldn't pull \"{name}\"")
+        };
+        alert
+            .title(title)
+            .description(error.clone())
+            .ok_text("OK")
+            .centered()
+            .entrance(DialogEntrance::FadeSlide)
+    });
+}
+
 fn settings_row(label: &'static str, control: impl IntoElement) -> impl IntoElement {
     h_flex()
         .w_full()
@@ -260,6 +655,52 @@ fn window_controls_button(
 }
 
 impl AppView {
+    pub fn open_wireless_device_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let address = cx.new(|cx| InputState::new(window, cx).placeholder("IP address"));
+        let port = cx.new(|cx| InputState::new(window, cx).placeholder("Port"));
+        let app = cx.weak_entity();
+        let view = cx.new(|_cx| WirelessView::new(app, address.clone(), port.clone()));
+        let initial_focus = Cell::new(true);
+        window.open_dialog(cx, move |dialog, window, cx| {
+            if initial_focus.replace(false) {
+                let handle = address.read(cx).focus_handle(cx);
+                handle.focus(window, cx);
+            }
+            dialog
+                .title("Add wireless device")
+                .width(appearance::dialog_width(window.viewport_size().width))
+                .centered()
+                .entrance(DialogEntrance::FadeSlide)
+                .child(view.clone())
+        });
+    }
+
+    pub fn open_pair_wireless_device_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let address = cx.new(|cx| InputState::new(window, cx).placeholder("Pairing IP address"));
+        let port = cx.new(|cx| InputState::new(window, cx).placeholder("Pairing port"));
+        let code = cx.new(|cx| InputState::new(window, cx).placeholder("Pairing code"));
+        let app = cx.weak_entity();
+        let view =
+            cx.new(|_cx| PairWirelessView::new(app, address.clone(), port.clone(), code.clone()));
+        let initial_focus = Cell::new(true);
+        window.open_dialog(cx, move |dialog, window, cx| {
+            if initial_focus.replace(false) {
+                let handle = address.read(cx).focus_handle(cx);
+                handle.focus(window, cx);
+            }
+            dialog
+                .title("Pair a new device")
+                .width(appearance::dialog_width(window.viewport_size().width))
+                .centered()
+                .entrance(DialogEntrance::FadeSlide)
+                .child(view.clone())
+        });
+    }
+
     pub fn open_settings_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let app = cx.weak_entity();
         let default = self.settings.adb_path.clone().unwrap_or_default();
