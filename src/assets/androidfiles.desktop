@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=AndroidFiles
+GenericName=Android File Manager
+Comment=Browse and transfer files on Android devices over adb
+Exec=androidfiles
+TryExec=androidfiles
+Icon=androidfiles
+Terminal=false
+Categories=System;FileTools;FileManager;
+Keywords=android;adb;file;manager;transfer;
+StartupWMClass=com.androidfiles.app
