@@ -16,6 +16,7 @@ chrono = { version = "0.4", features = ["serde"] }
 smol = "2"
 log = "0.4"
 env_logger = "0.11"
+cargo-deb = "3.8.0"
 
 [dev-dependencies]
 gpui-pre = { version = "=0.3.11", features = ["test-support"] }
@@ -31,3 +32,16 @@ opt-level = 3
 opt-level = 3
 lto = "thin"
 codegen-units = 4
+
+[package.metadata.deb]
+maintainer = "NullCode1337 <contact.nullcode@proton.me>"
+copyright = "2026, NullCode1337"
+license-file = ["LICENSE", "4"]
+extended-description = """
+A native desktop application built with GPUI in Rust.
+"""
+depends = "$auto, libvulkan1, libx11-6, libxcb1, adb, fastboot"
+assets = [
+    ["target/release/AndroidFiles", "usr/bin/AndroidFiles", "755"],
+    ["assets/*", "usr/share/AndroidFiles/assets/", "644"]
+]
