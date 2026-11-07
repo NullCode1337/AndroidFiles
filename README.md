@@ -10,9 +10,19 @@ A desktop file manager for Android devices over adb
 ## Run
 
 ```sh
-cargo build
-./target/debug/AndroidFiles
+cargo run
 ```
+
+## Build
+
+```sh
+cargo build --release
+./target/release/AndroidFiles
+```
+
+For a smaller, slightly slower binary, add `strip = true` to
+`[profile.release]` (or pass `RUSTFLAGS="-C strip=symbols"` for a one-off
+build).
 
 ## Test
 
