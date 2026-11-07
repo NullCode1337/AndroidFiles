@@ -307,7 +307,6 @@ impl AppView {
         };
 
         // Read theme colors before the closures borrow the theme.
-        let drop_bg = cx.theme().drop_target;
         let this = cx.weak_entity();
 
         v_flex()
@@ -342,6 +341,12 @@ impl AppView {
                     .flex_1()
                     .min_h_0()
                     .w_full()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.clear_selection(side, cx);
+                        }),
+                    )
                     .on_drop::<ExternalPaths>({
                         let this = this.clone();
                         let target = path.clone();
@@ -362,27 +367,12 @@ impl AppView {
                             .ok();
                         }
                     })
-                    .on_drag_move::<ExternalPaths>({
-                        let this = this.clone();
-                        move |_, _, cx| {
-                            this.update(cx, |this, cx| this.set_drag_over(side, cx))
-                                .ok();
-                        }
-                    })
-                    .on_drag_move::<DragPayload>({
-                        let this = this.clone();
-                        move |_, _, cx| {
-                            this.update(cx, |this, cx| this.set_drag_over(side, cx))
-                                .ok();
-                        }
-                    })
-                    .when(self.drag_over == Some(side), move |el| el.bg(drop_bg))
                     .when(loading, |el| el.opacity(0.55))
                     .child(content)
                     .child(
                         Scrollbar::vertical(&scroll)
                             .id(format!("{pane_id}-scrollbar"))
-                            .mode(ScrollbarMode::Always)
+                            .mode(ScrollbarMode::Scrolling)
                             .styles(|styles| {
                                 styles
                                     .track(|track| track.width(px(8.)))
@@ -460,7 +450,7 @@ impl AppView {
             .w_full()
             .h(px(24.))
             .items_center()
-            .gap_2()
+            .gap_1()
             .px(px(14.))
             .bg(cx.theme().list_head)
             .border_b_1()
@@ -469,11 +459,29 @@ impl AppView {
             .text_color(muted)
             .child(div().flex_1().min_w_0().child("Name"))
             .when(!compact, |el| {
-                el.child(div().w(px(132.)).flex_none().child("Date Modified"))
+                el.child(
+                    div()
+                        .w(appearance::LIST_DATE_WIDTH)
+                        .flex_none()
+                        .text_right()
+                        .child("Date Modified"),
+                )
             })
-            .child(div().w(px(78.)).flex_none().text_right().child("Size"))
+            .child(
+                div()
+                    .w(appearance::LIST_SIZE_WIDTH)
+                    .flex_none()
+                    .text_right()
+                    .child("Size"),
+            )
             .when(!compact, |el| {
-                el.child(div().w(px(84.)).flex_none().child("Permissions"))
+                el.child(
+                    div()
+                        .w(appearance::LIST_PERMISSIONS_WIDTH)
+                        .flex_none()
+                        .text_right()
+                        .child("Permissions"),
+                )
             })
     }
 
@@ -590,6 +598,7 @@ impl AppView {
         } else {
             cx.theme().muted_foreground
         };
+        let drop_bg = cx.theme().drop_target;
 
         let this = cx.weak_entity();
         let path = entry.path.clone();
@@ -612,13 +621,37 @@ impl AppView {
             .h(px(appearance::LIST_ROW_HEIGHT))
             .mx(px(4.))
             .items_center()
-            .gap_2()
+            .gap_1()
             .px(px(10.))
             .rounded(px(6.))
             .cursor_pointer()
             .text_color(fg)
             .when(selected, move |el| el.bg(selection))
             .when(!selected, move |el| el.hover(move |s| s.bg(hover_bg)))
+            .when(is_dir, move |el| {
+                el.drag_over::<DragPayload>(move |style, _, _, _| style.bg(drop_bg))
+                    .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(drop_bg))
+            })
+            .on_mouse_down(MouseButton::Left, {
+                let this = this.clone();
+                let path = path.clone();
+                move |event, _, cx| {
+                    cx.stop_propagation();
+                    let add = event.modifiers.control || event.modifiers.platform;
+                    this.update(cx, |this, cx| this.begin_drag_select(&path, side, add, cx))
+                        .ok();
+                }
+            })
+            .on_mouse_move({
+                let this = this.clone();
+                let path = path.clone();
+                move |event: &MouseMoveEvent, _, cx| {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        this.update(cx, |this, cx| this.extend_drag_select(&path, side, cx))
+                            .ok();
+                    }
+                }
+            })
             .on_click({
                 let this = this.clone();
                 let path = path.clone();
@@ -635,15 +668,17 @@ impl AppView {
                     .ok();
                 }
             })
-            .on_drag(
-                DragPayload {
-                    side,
-                    paths: drag_paths,
-                },
-                move |payload, _, _window, cx| {
-                    cx.new(|_cx| DragGhost::new(payload.paths.len().to_string()))
-                },
-            )
+            .when(selected && self.select_drag.is_none(), |el| {
+                el.on_drag(
+                    DragPayload {
+                        side,
+                        paths: drag_paths,
+                    },
+                    move |payload, offset, _window, cx| {
+                        cx.new(|_cx| DragGhost::new(payload.paths.len().to_string(), offset))
+                    },
+                )
+            })
             .on_drop::<ExternalPaths>({
                 let this = this.clone();
                 let target = path.clone();
@@ -709,10 +744,11 @@ impl AppView {
             .when(!compact, |el| {
                 el.child(
                     div()
-                        .w(px(132.))
+                        .w(appearance::LIST_DATE_WIDTH)
                         .flex_none()
                         .text_xs()
                         .text_color(sub)
+                        .text_right()
                         .overflow_hidden()
                         .text_ellipsis()
                         .child(format_date(entry.modified)),
@@ -720,7 +756,7 @@ impl AppView {
             })
             .child(
                 div()
-                    .w(px(78.))
+                    .w(appearance::LIST_SIZE_WIDTH)
                     .flex_none()
                     .text_xs()
                     .text_color(sub)
@@ -730,10 +766,11 @@ impl AppView {
             .when(!compact, |el| {
                 el.child(
                     div()
-                        .w(px(84.))
+                        .w(appearance::LIST_PERMISSIONS_WIDTH)
                         .flex_none()
                         .text_xs()
                         .text_color(sub)
+                        .text_right()
                         .overflow_hidden()
                         .text_ellipsis()
                         .child(format_mode(entry.mode)),
@@ -753,6 +790,7 @@ impl AppView {
         let hover_bg = cx.theme().list_hover;
         let selection = cx.theme().selection;
         let fg = cx.theme().foreground;
+        let drop_bg = cx.theme().drop_target;
 
         let this = cx.weak_entity();
         let path = entry.path.clone();
@@ -790,6 +828,30 @@ impl AppView {
             .pt(px(6.))
             .gap(px(7.))
             .cursor_pointer()
+            .when(is_dir, move |el| {
+                el.drag_over::<DragPayload>(move |style, _, _, _| style.bg(drop_bg))
+                    .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(drop_bg))
+            })
+            .on_mouse_down(MouseButton::Left, {
+                let this = this.clone();
+                let path = path.clone();
+                move |event, _, cx| {
+                    cx.stop_propagation();
+                    let add = event.modifiers.control || event.modifiers.platform;
+                    this.update(cx, |this, cx| this.begin_drag_select(&path, side, add, cx))
+                        .ok();
+                }
+            })
+            .on_mouse_move({
+                let this = this.clone();
+                let path = path.clone();
+                move |event: &MouseMoveEvent, _, cx| {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        this.update(cx, |this, cx| this.extend_drag_select(&path, side, cx))
+                            .ok();
+                    }
+                }
+            })
             .on_click({
                 let this = this.clone();
                 let path = path.clone();
@@ -806,15 +868,17 @@ impl AppView {
                     .ok();
                 }
             })
-            .on_drag(
-                DragPayload {
-                    side,
-                    paths: drag_paths,
-                },
-                move |payload, _, _window, cx| {
-                    cx.new(|_cx| DragGhost::new(payload.paths.len().to_string()))
-                },
-            )
+            .when(selected && self.select_drag.is_none(), |el| {
+                el.on_drag(
+                    DragPayload {
+                        side,
+                        paths: drag_paths,
+                    },
+                    move |payload, offset, _window, cx| {
+                        cx.new(|_cx| DragGhost::new(payload.paths.len().to_string(), offset))
+                    },
+                )
+            })
             .on_drop::<ExternalPaths>({
                 let this = this.clone();
                 let target = path.clone();
@@ -892,7 +956,13 @@ impl AppView {
             )
     }
 
-    fn select_entry(&mut self, path: &str, side: Side, add: bool, cx: &mut Context<Self>) {
+    pub(crate) fn select_entry(
+        &mut self,
+        path: &str,
+        side: Side,
+        add: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.focused_side = side;
         if add {
             if !self.selected.insert(path.to_string()) {
@@ -916,6 +986,66 @@ impl AppView {
             cx.notify();
         } else {
             self.select_entry(path, side, false, cx);
+        }
+    }
+
+    pub(crate) fn clear_selection(&mut self, side: Side, cx: &mut Context<Self>) {
+        self.focused_side = side;
+        self.select_drag = None;
+        self.select_drag_anchor = None;
+        if !self.selected.is_empty() {
+            self.selected.clear();
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn begin_drag_select(
+        &mut self,
+        path: &str,
+        side: Side,
+        add: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.focused_side = side;
+        // A selected row is a transfer handle; leave its `on_drag` in place.
+        if self.is_selected(path) {
+            self.select_drag_anchor = None;
+            cx.notify();
+            return;
+        }
+        if add {
+            // Let the click add the anchor; a sweep commits it on first move.
+            self.select_drag = Some(side);
+            self.select_drag_anchor = Some(path.to_string());
+            cx.notify();
+            return;
+        }
+        self.selected.clear();
+        self.selected.insert(path.to_string());
+        self.select_drag = Some(side);
+        self.select_drag_anchor = None;
+        cx.notify();
+    }
+
+    pub(crate) fn extend_drag_select(&mut self, path: &str, side: Side, cx: &mut Context<Self>) {
+        if self.select_drag != Some(side) {
+            return;
+        }
+        let mut changed = self
+            .select_drag_anchor
+            .take()
+            .is_some_and(|anchor| self.selected.insert(anchor));
+        changed |= self.selected.insert(path.to_string());
+        if changed {
+            self.focused_side = side;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn end_drag_select(&mut self, cx: &mut Context<Self>) {
+        self.select_drag_anchor = None;
+        if self.select_drag.take().is_some() {
+            cx.notify();
         }
     }
 
@@ -1075,8 +1205,18 @@ fn build_entry_menu(
                     let path = path.clone();
                     move |_, _, cx| {
                         this.update(cx, |this, cx| {
+                            this.focused_side = Side::Host;
+                            let paths = if this.is_selected(&path) {
+                                this.selected_paths(Side::Host)
+                            } else {
+                                vec![path.clone()]
+                            };
                             let dest = this.device_cwd.clone();
-                            this.push_paths_to(vec![PathBuf::from(path.clone())], dest, cx)
+                            this.push_paths_to(
+                                paths.into_iter().map(PathBuf::from).collect(),
+                                dest,
+                                cx,
+                            );
                         })
                         .ok();
                     }
@@ -1089,9 +1229,17 @@ fn build_entry_menu(
                 .on_click({
                     let this = this.clone();
                     let path = path.clone();
-                    move |_, w, cx| {
-                        this.update(cx, |this, cx| this.open_pull_target_dialog(&path, w, cx))
-                            .ok();
+                    move |_, window, cx| {
+                        this.update(cx, |this, cx| {
+                            this.focused_side = Side::Device;
+                            let paths = if this.is_selected(&path) {
+                                this.selected_paths(Side::Device)
+                            } else {
+                                vec![path.clone()]
+                            };
+                            this.open_pull_target_dialog(paths, window, cx)
+                        })
+                        .ok();
                     }
                 }),
         );
@@ -1103,11 +1251,9 @@ fn build_entry_menu(
                 .icon(Icon::new(IconName::Copy))
                 .on_click({
                     let this = this.clone();
-                    let path = path.clone();
                     move |_, _, cx| {
                         this.update(cx, |this, cx| {
-                            this.selected.clear();
-                            this.selected.insert(path.clone());
+                            this.focused_side = side;
                             this.set_clipboard(ClipboardOp::Copy, side, cx)
                         })
                         .ok();
@@ -1119,11 +1265,9 @@ fn build_entry_menu(
                 .icon(Icon::new(IconName::Scissors))
                 .on_click({
                     let this = this.clone();
-                    let path = path.clone();
                     move |_, _, cx| {
                         this.update(cx, |this, cx| {
-                            this.selected.clear();
-                            this.selected.insert(path.clone());
+                            this.focused_side = side;
                             this.set_clipboard(ClipboardOp::Cut, side, cx)
                         })
                         .ok();
@@ -1152,12 +1296,10 @@ fn build_entry_menu(
                 .icon(Icon::new(IconName::Trash))
                 .on_click({
                     let this = this.clone();
-                    let path = path.clone();
-                    move |_, w, cx| {
+                    move |_, window, cx| {
                         this.update(cx, |this, cx| {
-                            this.selected.clear();
-                            this.selected.insert(path.clone());
-                            this.delete_selected(w, cx)
+                            this.focused_side = side;
+                            this.delete_selected(window, cx)
                         })
                         .ok();
                     }

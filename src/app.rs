@@ -30,8 +30,8 @@ use crate::backend::polling::{PollEvent, spawn_poller};
 use crate::backend::progress::ProgressSink;
 use crate::backend::resolve::resolve_adb_binary;
 use crate::model::{
-    BackupEntry, ClipboardEntry, ClipboardOp, ClipboardSource, DeviceInfo, FileEntry, Side,
-    TransferDirection, TransferProgress,
+    BackupEntry, ClipboardEntry, ClipboardItem, ClipboardOp, ClipboardSource, DeviceInfo,
+    FileEntry, Side, TransferDirection, TransferProgress,
 };
 use crate::settings::{Settings, ThemePref, WindowControlsPref};
 
@@ -65,12 +65,14 @@ struct VisibleCache {
 /// The small ghost rendered while dragging file rows internally.
 pub struct DragGhost {
     label: SharedString,
+    cursor: Point<Pixels>,
 }
 
 impl DragGhost {
-    pub fn new(label: impl Into<SharedString>) -> Self {
+    pub fn new(label: impl Into<SharedString>, cursor: Point<Pixels>) -> Self {
         Self {
             label: label.into(),
+            cursor,
         }
     }
 }
@@ -78,6 +80,8 @@ impl DragGhost {
 impl Render for DragGhost {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .ml(self.cursor.x + px(8.))
+            .mt(self.cursor.y + px(8.))
             .px_2()
             .py_1()
             .rounded_md()
@@ -138,7 +142,7 @@ pub struct AppView {
     pub(crate) selected: HashSet<String>,
     pub(crate) focused_side: Side,
 
-    clipboard: Option<ClipboardEntry>,
+    pub(crate) clipboard: Option<ClipboardEntry>,
 
     pub(crate) transfers: Vec<TransferProgress>,
     next_transfer_id: u64,
@@ -154,7 +158,10 @@ pub struct AppView {
     pane_drag: Option<(f32, f32)>,
     /// Set while the pointer is pressed on the draggable title bar.
     titlebar_drag: bool,
-    pub(crate) drag_over: Option<Side>,
+    /// Side whose rows are being swept by a held left button.
+    pub(crate) select_drag: Option<Side>,
+    /// Additive sweep anchor, committed on the first move or the click.
+    pub(crate) select_drag_anchor: Option<String>,
 
     /// Bumped when a pane's entries are replaced; invalidates the cache.
     entries_revision: u64,
@@ -219,7 +226,8 @@ impl AppView {
             host_pane_custom: false,
             pane_drag: None,
             titlebar_drag: false,
-            drag_over: None,
+            select_drag: None,
+            select_drag_anchor: None,
             entries_revision: 0,
             visible_cache: RefCell::new(VisibleCache::default()),
             host_scroll: VirtualListScrollHandle::new(),
@@ -278,6 +286,7 @@ impl AppView {
             KeyBinding::new("ctrl-i", ShowProperties, Some(KEY_CONTEXT)),
             KeyBinding::new("cmd-shift-h", ToggleHidden, Some(KEY_CONTEXT)),
             KeyBinding::new("cmd-shift-b", ToggleHostPane, Some(KEY_CONTEXT)),
+            KeyBinding::new("ctrl-h", ToggleHidden, Some(KEY_CONTEXT)),
             KeyBinding::new("ctrl-shift-h", ToggleHidden, Some(KEY_CONTEXT)),
             KeyBinding::new("ctrl-shift-b", ToggleHostPane, Some(KEY_CONTEXT)),
             KeyBinding::new("cmd-f", FocusSearch, Some(KEY_CONTEXT)),
@@ -365,6 +374,7 @@ impl AppView {
         viewport_width: Pixels,
         cx: &mut Context<Self>,
     ) {
+        gpui_kit::component::global_state::GlobalState::suppress_text_selection(cx);
         self.host_pane_width = self.clamped_host_width(viewport_width);
         self.pane_drag = Some((pointer_x, f32::from(self.host_pane_width)));
         cx.notify();
@@ -395,14 +405,6 @@ impl AppView {
 
     pub(crate) fn end_pane_resize(&mut self, cx: &mut Context<Self>) {
         if self.pane_drag.take().is_some() {
-            cx.notify();
-        }
-    }
-
-    /// Drag-move fires per pointer sample; repaint only on a pane change.
-    pub(crate) fn set_drag_over(&mut self, side: Side, cx: &mut Context<Self>) {
-        if self.drag_over != Some(side) {
-            self.drag_over = Some(side);
             cx.notify();
         }
     }
@@ -1177,19 +1179,18 @@ impl AppView {
     }
 
     pub(crate) fn set_clipboard(&mut self, op: ClipboardOp, side: Side, cx: &mut Context<Self>) {
-        let paths = self.selected_paths(side);
-        if paths.is_empty() {
-            return;
-        }
-        // Keep the last entry plus every path on its side.
-        let first = paths[0].clone();
-        let name = first.rsplit('/').next().unwrap_or(&first).to_string();
-        let is_dir = self
+        let items: Vec<ClipboardItem> = self
             .entries_for(side)
             .iter()
-            .find(|e| e.path == first)
-            .map(|e| e.is_dir())
-            .unwrap_or(false);
+            .filter(|entry| self.selected.contains(&entry.path))
+            .map(|entry| ClipboardItem {
+                path: entry.path.clone(),
+                name: entry.name.clone(),
+            })
+            .collect();
+        if items.is_empty() {
+            return;
+        }
         self.clipboard = Some(ClipboardEntry {
             op,
             source: if side == Side::Host {
@@ -1197,15 +1198,19 @@ impl AppView {
             } else {
                 ClipboardSource::Device
             },
-            path: first,
-            name,
-            is_dir,
+            items,
         });
         cx.notify();
     }
 
-    pub(crate) fn paste(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(clip) = self.clipboard.clone() else {
+            window.push_notification(
+                gpui_kit::component::notification::Notification::info(
+                    "Nothing to paste: the clipboard is empty.",
+                ),
+                cx,
+            );
             return;
         };
         let target = self.focused_side;
@@ -1215,14 +1220,16 @@ impl AppView {
 
         match (clip.source, target) {
             (ClipboardSource::Host, Side::Host) => {
-                let dest = host_dir.join(&clip.name);
-                let res = if cut {
-                    host::move_entry(Path::new(&clip.path), &dest)
-                } else {
-                    host::copy(Path::new(&clip.path), &dest)
-                };
-                if let Err(e) = res {
-                    self.error = Some(e.to_string());
+                for item in &clip.items {
+                    let dest = host_dir.join(&item.name);
+                    let res = if cut {
+                        host::move_entry(Path::new(&item.path), &dest)
+                    } else {
+                        host::copy(Path::new(&item.path), &dest)
+                    };
+                    if let Err(e) = res {
+                        self.error = Some(e.to_string());
+                    }
                 }
                 if cut {
                     self.clipboard = None;
@@ -1234,18 +1241,26 @@ impl AppView {
                     return;
                 };
                 let adb_path = self.adb_path.clone();
-                let source = clip.path.clone();
-                let dest = remote_join(&device_dir, &clip.name);
+                let items = clip.items.clone();
+                let dest_dir = device_dir.clone();
                 cx.spawn(async move |this, cx| {
                     let result = cx
                         .background_executor()
                         .spawn(async move {
                             let adb = AdbContext::new(adb_path);
-                            if cut {
-                                adb.move_entry(&serial, &source, &dest)
-                            } else {
-                                adb.copy(&serial, &source, &dest)
+                            let mut error = None;
+                            for item in items {
+                                let dest = remote_join(&dest_dir, &item.name);
+                                let result = if cut {
+                                    adb.move_entry(&serial, &item.path, &dest)
+                                } else {
+                                    adb.copy(&serial, &item.path, &dest)
+                                };
+                                if let Err(e) = result {
+                                    error.get_or_insert(e);
+                                }
                             }
+                            error.map_or(Ok(()), Err)
                         })
                         .await;
                     this.update(cx, |this, cx| {
@@ -1263,12 +1278,18 @@ impl AppView {
                 .detach();
             }
             (ClipboardSource::Host, Side::Device) => {
-                self.push_paths_to(vec![PathBuf::from(&clip.path)], device_dir, cx);
+                let paths = clip
+                    .items
+                    .iter()
+                    .map(|item| PathBuf::from(&item.path))
+                    .collect();
+                self.push_paths_to(paths, device_dir, cx);
                 // Cross-side cut degrades to copy; the source stays put.
                 self.clipboard = None;
             }
             (ClipboardSource::Device, Side::Host) => {
-                self.pull_paths_to(vec![clip.path.clone()], host_dir, cx);
+                let paths = clip.items.iter().map(|item| item.path.clone()).collect();
+                self.pull_paths_to(paths, host_dir, cx);
                 self.clipboard = None;
             }
         }
@@ -1758,7 +1779,6 @@ impl AppView {
         target_dir: String,
         cx: &mut Context<Self>,
     ) {
-        self.drag_over = None;
         match target_side {
             Side::Host => {
                 for p in paths {
@@ -1793,7 +1813,6 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.drag_over = None;
         let modifiers = window.modifiers();
         let copy =
             cfg!(target_os = "macos") || modifiers.alt || modifiers.control || modifiers.platform;
@@ -2384,6 +2403,9 @@ impl Render for AppView {
             .flex_col()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                gpui_kit::component::global_state::GlobalState::suppress_text_selection(cx);
+            })
             .on_action::<OpenSettings>(cx.listener(|this, _, window, cx| {
                 this.open_settings_dialog(window, cx);
             }))
@@ -2456,6 +2478,14 @@ impl Render for AppView {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
                     this.end_pane_resize(cx);
+                    this.end_drag_select(cx);
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.end_pane_resize(cx);
+                    this.end_drag_select(cx);
                 }),
             )
             .child(self.render_titlebar(window, cx))

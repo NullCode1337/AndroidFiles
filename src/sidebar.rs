@@ -12,7 +12,7 @@ use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use crate::app::{AppView, DragGhost};
+use crate::app::{AppView, DragGhost, DragPayload};
 use crate::appearance;
 use crate::format::{device_label, format_size, format_speed};
 use crate::model::Side;
@@ -24,6 +24,7 @@ impl AppView {
         let border = cx.theme().border;
         let muted = cx.theme().muted_foreground;
         let primary = cx.theme().primary;
+        let drop_bg = cx.theme().drop_target;
         let icon_color: Hsla = rgba(0x5a6570ff).into();
         let active = cx.theme().sidebar_accent;
         let hover = cx.theme().list_hover;
@@ -92,28 +93,61 @@ impl AppView {
                     .when(self.selected_device.is_some(), {
                         let this = this.clone();
                         move |el| {
-                            el.child(nav_row(
-                                "nav-internal-storage",
-                                "Internal storage",
-                                IconName::HardDrive,
-                                NavRowColors {
-                                    icon: primary,
-                                    active,
-                                    hover,
-                                },
-                                self.focused_side == Side::Device
-                                    && (self.device_cwd == "/sdcard"
-                                        || self.device_cwd == "/storage/emulated/0"),
-                                {
-                                    let this = this.clone();
-                                    move |_, _, cx| {
-                                        this.update(cx, |this, cx| {
-                                            this.navigate_device("/sdcard".into(), cx)
+                            let drop_payload = this.clone();
+                            let drop_external = this.clone();
+                            el.child(
+                                nav_row(
+                                    "nav-internal-storage",
+                                    "Internal storage",
+                                    IconName::HardDrive,
+                                    NavRowColors {
+                                        icon: primary,
+                                        active,
+                                        hover,
+                                    },
+                                    self.focused_side == Side::Device
+                                        && (self.device_cwd == "/sdcard"
+                                            || self.device_cwd == "/storage/emulated/0"),
+                                    {
+                                        let this = this.clone();
+                                        move |_, _, cx| {
+                                            this.update(cx, |this, cx| {
+                                                this.navigate_device("/sdcard".into(), cx)
+                                            })
+                                            .ok();
+                                        }
+                                    },
+                                )
+                                .drag_over::<DragPayload>(move |style, _, _, _| style.bg(drop_bg))
+                                .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(drop_bg))
+                                .on_drop::<DragPayload>(move |payload, window, cx| {
+                                    drop_payload
+                                        .update(cx, |this, cx| {
+                                            this.handle_internal_drop(
+                                                payload,
+                                                Side::Device,
+                                                "/sdcard".into(),
+                                                window,
+                                                cx,
+                                            )
                                         })
                                         .ok();
-                                    }
-                                },
-                            ))
+                                })
+                                .on_drop::<ExternalPaths>(
+                                    move |paths, _, cx| {
+                                        drop_external
+                                            .update(cx, |this, cx| {
+                                                this.handle_external_drop(
+                                                    paths.paths(),
+                                                    Side::Device,
+                                                    "/sdcard".into(),
+                                                    cx,
+                                                )
+                                            })
+                                            .ok();
+                                    },
+                                ),
+                            )
                         }
                     })
                     .child(nav_row(
@@ -239,6 +273,7 @@ impl AppView {
         let this = cx.weak_entity();
         let add_this = this.clone();
         let muted = cx.theme().muted_foreground;
+        let drop_bg = cx.theme().drop_target;
         let device = self.selected_device.clone();
         let favorites: Vec<_> = self
             .settings
@@ -257,8 +292,12 @@ impl AppView {
                 el.children(favorites.into_iter().map(move |(index, fav)| {
                     let click = this.clone();
                     let drop = this.clone();
+                    let drop_internal = this.clone();
+                    let drop_external = this.clone();
                     let serial = fav.device_serial.clone();
                     let path = fav.path.clone();
+                    let drop_path_internal = path.clone();
+                    let drop_path_external = path.clone();
                     let name = fav.name.clone();
                     let drag_name = name.clone();
                     let is_active = self.focused_side == Side::Device && self.device_cwd == path;
@@ -281,14 +320,41 @@ impl AppView {
                             }
                         },
                     )
-                    .on_drag(FavoriteDrag { index }, move |_, _, _, cx| {
-                        cx.new(|_cx| DragGhost::new(drag_name.clone()))
+                    .on_drag(FavoriteDrag { index }, move |_, offset, _, cx| {
+                        cx.new(|_cx| DragGhost::new(drag_name.clone(), offset))
                     })
                     .on_drop::<FavoriteDrag>(move |payload, _, cx| {
                         drop.update(cx, |this, cx| {
                             this.reorder_favorite(payload.index, index, cx)
                         })
                         .ok();
+                    })
+                    .drag_over::<DragPayload>(move |style, _, _, _| style.bg(drop_bg))
+                    .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(drop_bg))
+                    .on_drop::<DragPayload>(move |payload, window, cx| {
+                        drop_internal
+                            .update(cx, |this, cx| {
+                                this.handle_internal_drop(
+                                    payload,
+                                    Side::Device,
+                                    drop_path_internal.clone(),
+                                    window,
+                                    cx,
+                                )
+                            })
+                            .ok();
+                    })
+                    .on_drop::<ExternalPaths>(move |paths, _, cx| {
+                        drop_external
+                            .update(cx, |this, cx| {
+                                this.handle_external_drop(
+                                    paths.paths(),
+                                    Side::Device,
+                                    drop_path_external.clone(),
+                                    cx,
+                                )
+                            })
+                            .ok();
                     })
                 }))
             })

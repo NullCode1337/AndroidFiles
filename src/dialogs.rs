@@ -1029,7 +1029,7 @@ impl AppView {
 
     pub fn open_pull_target_dialog(
         &mut self,
-        path: &str,
+        paths: Vec<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1041,7 +1041,6 @@ impl AppView {
         });
         let initial_focus = Cell::new(true);
         let this = cx.weak_entity();
-        let path = path.to_string();
         window.open_dialog(cx, move |dialog, window, cx| {
             if initial_focus.replace(false) {
                 let handle = input.read(cx).focus_handle(cx);
@@ -1070,11 +1069,11 @@ impl AppView {
                         .child(Button::new("pull-ok").primary().label("Pull").on_click({
                             let this = this.clone();
                             let input = input.clone();
-                            let path = path.clone();
+                            let paths = paths.clone();
                             move |_, window, cx| {
                                 let dest = input.read(cx).value().to_string();
                                 this.update(cx, |this, cx| {
-                                    this.pull_paths_to(vec![path.clone()], PathBuf::from(dest), cx);
+                                    this.pull_paths_to(paths.clone(), PathBuf::from(dest), cx);
                                 })
                                 .ok();
                                 window.close_dialog(cx);

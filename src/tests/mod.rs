@@ -695,6 +695,194 @@ fn favorites_can_be_reordered() {
 }
 
 #[test]
+fn empty_paste_shows_a_toast() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.empty-paste".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, cx| view.paste(window, cx));
+        assert!(
+            !window.notifications(cx).is_empty(),
+            "an empty paste shows a toast"
+        );
+    })
+    .expect("paste with an empty clipboard");
+}
+
+#[test]
+fn blank_space_click_clears_selection() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (_handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.blank-click".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, cx| {
+        view.load_demo_snapshot_state();
+        view.selected.clear();
+        view.selected.insert("/sdcard/Pictures".into());
+        view.focused_side = Side::Device;
+        view.clear_selection(Side::Host, cx);
+        assert!(view.selected.is_empty());
+        assert_eq!(view.focused_side, Side::Host);
+    });
+}
+
+#[test]
+fn clipboard_keeps_all_selected_items() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (_handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.clipboard-items".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, cx| {
+        view.load_demo_snapshot_state();
+        view.selected.clear();
+        view.selected.insert("/sdcard/Documents".into());
+        view.selected.insert("/sdcard/Music".into());
+        view.set_clipboard(crate::model::ClipboardOp::Copy, Side::Device, cx);
+        let clipboard = view.clipboard.as_ref().expect("clipboard populated");
+        let mut names: Vec<_> = clipboard
+            .items
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["Documents", "Music"]);
+    });
+}
+
+#[test]
+fn dragging_across_rows_extends_selection() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (_handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.drag-select".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, cx| {
+        view.load_demo_snapshot_state();
+        view.selected.clear();
+        view.begin_drag_select("/sdcard/Documents", Side::Device, false, cx);
+        view.extend_drag_select("/sdcard/Music", Side::Device, cx);
+        view.extend_drag_select("/sdcard/Pictures", Side::Host, cx);
+        assert_eq!(view.selected.len(), 2);
+        assert!(view.selected.contains("/sdcard/Documents"));
+        assert!(view.selected.contains("/sdcard/Music"));
+        assert_eq!(view.select_drag, Some(Side::Device));
+        view.end_drag_select(cx);
+        assert_eq!(view.select_drag, None);
+
+        // Ctrl-click adds without being undone by the release click.
+        view.selected.clear();
+        view.begin_drag_select("/sdcard/Documents", Side::Device, true, cx);
+        assert!(view.selected.is_empty());
+        view.end_drag_select(cx);
+        view.select_entry("/sdcard/Documents", Side::Device, true, cx);
+        view.select_entry("/sdcard/Music", Side::Device, true, cx);
+        assert_eq!(view.selected.len(), 2);
+
+        // Ctrl-sweep commits the anchor on the first move.
+        view.selected.clear();
+        view.begin_drag_select("/sdcard/Documents", Side::Device, true, cx);
+        view.extend_drag_select("/sdcard/Music", Side::Device, cx);
+        assert!(view.selected.contains("/sdcard/Documents"));
+        assert!(view.selected.contains("/sdcard/Music"));
+        view.end_drag_select(cx);
+
+        // A selected row starts a transfer drag, not another sweep.
+        view.begin_drag_select("/sdcard/Documents", Side::Device, false, cx);
+        assert_eq!(view.select_drag, None);
+        assert_eq!(view.selected.len(), 2);
+    });
+}
+
+#[test]
 fn right_click_selects_unselected_rows_and_keeps_multiselection() {
     let mut cx = HeadlessAppContext::with_platform(
         gpui_kit::platform::current_platform(true).text_system(),

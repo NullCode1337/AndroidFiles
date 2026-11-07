@@ -146,9 +146,13 @@ impl TransferProgress {
 pub struct ClipboardEntry {
     pub op: ClipboardOp,
     pub source: ClipboardSource,
+    pub items: Vec<ClipboardItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipboardItem {
     pub path: String,
     pub name: String,
-    pub is_dir: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

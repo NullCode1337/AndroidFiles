@@ -97,7 +97,7 @@ State lives in `AppView`:
 - One `selected: HashSet<String>` and one `focused_side` shared by both panes.
 - `clipboard`, `transfers`, `backup_entries`, `status_line`, `error`.
 - View state: `view_mode`, `show_host_pane`, `host_pane_width`,
-  `host_pane_custom`, `pane_drag`, `titlebar_drag`, `drag_over`.
+  `host_pane_custom`, `pane_drag`, `titlebar_drag`, `drag_over`, `select_drag`.
 - `entries_revision` + `visible_cache` (a `RefCell` display-order cache).
 
 ### Display-order cache
@@ -127,6 +127,23 @@ the list row and grid tile to open on one click; Ctrl/Cmd-click still only
 extends selection. Right-clicking an unselected row or tile selects it before
 opening the context menu; right-clicking a selected one keeps the selection.
 
+Pressing the left button on an unselected row or tile and moving over others
+sweeps them into the selection (`select_drag`). A selected row starts a
+transfer drag instead, so the sweep must start on an unselected item. Clicking
+empty list space clears the selection; row and tile presses stop propagation
+so the blank-space handler does not run. Pointer downs suppress window text
+selection, including the pane-divider drag.
+
+Context-menu Copy, Cut, Delete, Push, and Pull act on the whole selection;
+Rename and Properties act on the clicked item. The clipboard stores every
+selected item, and cross-side pastes push or pull them together. The drag
+ghost sits just below-right of the pointer instead of inheriting the row grab
+offset. Folder rows highlight as drop targets, not the whole pane; the
+Internal storage row and favorite rows also accept device/host and external
+drops.
+
+Pasting with an empty clipboard pushes an info toast instead of doing nothing.
+
 ### Window chrome and theme
 
 - Minimum window 900×600; default 1120×720, centered.
@@ -153,8 +170,9 @@ input win on shared keys (delete, copy/cut/paste, alt-left/right) while
 app-only chords still fire.
 
 Settings, refresh, alt-up (navigate up), delete, copy/cut/paste, new folder
-(`shift-n`), new file (`n`), enter (rename), properties (`i`), hidden files and
-host pane (`shift-h`/`shift-b`), focus search (`f`), back/forward (alt-left/right).
+(`shift-n`), new file (`n`), enter (rename), properties (`i`), hidden files
+(`ctrl-h`/`shift-h`) and host pane (`shift-b`), focus search (`f`),
+back/forward (alt-left/right).
 
 **Backspace is deliberately unbound.** Use alt-up to navigate up.
 
@@ -358,8 +376,9 @@ pure settings helpers instead.
 Covered: title-bar drag vs. toolbar press, divider drag, empty-device listing,
 sidebar routing to the selected device, right-click selection, settings dialog,
 properties dialog, backspace/delete editing the search field, ctrl-shift-n
-opening a dialog, favorite reordering, transfer expiry, the pane scrollbars,
-and sidebar scrolling.
+opening a dialog, multi-item clipboard, blank-space selection clearing,
+favorite reordering, transfer expiry, the pane scrollbars, sidebar scrolling,
+and the empty-paste toast.
 
 ### What a correct frame looks like
 
@@ -380,9 +399,11 @@ and sidebar scrolling.
   the order is saved immediately. Finished transfers disappear five seconds
   after completing. The whole sidebar scrolls when its content overflows.
 - List panes narrower than `COMPACT_LIST_WIDTH` (480 px) show Name and Size
-  only; wider panes add Date Modified and Permissions.
-- Each pane overlays a slim scrollbar at its right edge, visible only while
-  that pane's content overflows.
+  only; wider panes add Date Modified and Permissions. Name stays left-aligned;
+  the info columns are right-aligned with compact widths.
+- Each pane overlays a slim scrollbar at its right edge. It appears while
+  scrolling only when content overflows, then fades after idle; a window
+  resize that makes the content fit leaves no scrollbar behind.
 - Divider sits at `SIDEBAR_WIDTH + host_pane_width` with a 5 px grab band.
   Until dragged the split is equal and follows the window; afterwards the
   chosen width is clamped so the device pane keeps `MIN_DEVICE_PANE_WIDTH`.

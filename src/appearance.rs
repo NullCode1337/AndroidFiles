@@ -11,6 +11,9 @@ pub const PANE_DIVIDER_WIDTH: Pixels = px(5.);
 pub const MIN_HOST_PANE_WIDTH: Pixels = px(200.);
 pub const MIN_DEVICE_PANE_WIDTH: Pixels = px(300.);
 pub const COMPACT_LIST_WIDTH: Pixels = px(480.);
+pub const LIST_DATE_WIDTH: Pixels = px(116.);
+pub const LIST_SIZE_WIDTH: Pixels = px(56.);
+pub const LIST_PERMISSIONS_WIDTH: Pixels = px(80.);
 
 /// Dialogs follow the window so they do not look cramped on large screens.
 pub fn dialog_width(view_width: Pixels) -> Pixels {
