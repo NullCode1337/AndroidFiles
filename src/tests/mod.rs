@@ -373,6 +373,122 @@ fn ctrl_shift_n_opens_new_folder_dialog() {
     .expect("dispatch ctrl-shift-n");
 }
 
+#[test]
+fn enter_creates_the_folder_from_the_dialog() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.new-folder-enter".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+
+    let dir =
+        std::env::temp_dir().join(format!("androidfiles-enter-folder-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    view.update(&mut cx, |view, _| {
+        view.load_host_only_demo_state();
+        view.host_cwd = dir.clone();
+    });
+
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+        let focus = view.read(cx).search_input.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        window.dispatch_keystroke(Keystroke::parse("ctrl-shift-n").unwrap(), cx);
+        assert!(window.has_active_dialog(cx), "new folder dialog opens");
+        // Let the dialog render so its input takes initial focus.
+        window.refresh();
+        window.draw(cx).clear(cx);
+        for ch in ["c", "r", "e", "a", "t", "e", "d"] {
+            window.dispatch_keystroke(
+                Keystroke {
+                    modifiers: Modifiers::default(),
+                    key: ch.to_string(),
+                    key_char: Some(ch.to_string()),
+                },
+                cx,
+            );
+        }
+        window.dispatch_keystroke(Keystroke::parse("enter").unwrap(), cx);
+        assert!(
+            !window.has_active_dialog(cx),
+            "Enter submits the dialog instead of only closing it"
+        );
+    })
+    .expect("dispatch Enter in new folder dialog");
+
+    assert!(
+        dir.join("created").is_dir(),
+        "Enter creates the folder named in the input"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn enter_runs_wireless_validation_instead_of_closing() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.wireless-enter".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, _| view.load_demo_snapshot_state());
+
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, cx| view.open_wireless_device_dialog(window, cx));
+        window.refresh();
+        window.draw(cx).clear(cx);
+        window.dispatch_keystroke(Keystroke::parse("enter").unwrap(), cx);
+        assert!(
+            window.has_active_dialog(cx),
+            "an empty address reports an error and keeps the dialog open"
+        );
+    })
+    .expect("dispatch Enter in wireless dialog");
+}
+
 /// The delete key belongs to the search field while it is focused.
 #[test]
 fn delete_key_does_not_reach_file_actions_from_search() {
@@ -769,6 +885,59 @@ fn blank_space_click_clears_selection() {
         view.clear_selection(Side::Host, cx);
         assert!(view.selected.is_empty());
         assert_eq!(view.focused_side, Side::Host);
+    });
+}
+
+#[test]
+fn this_computer_expands_the_pc_pane_over_a_device() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (_handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.host-only".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, cx| {
+        view.load_demo_snapshot_state();
+        assert!(!view.host_only);
+        assert!(!view.show_host_pane);
+
+        view.activate_host_pane(cx);
+        assert!(view.host_only, "PC pane takes the full main area");
+        assert!(view.show_host_pane);
+        assert_eq!(view.focused_side, Side::Host);
+
+        view.activate_host_pane(cx);
+        assert!(!view.host_only, "second activation returns to the device");
+        assert!(!view.show_host_pane);
+        assert_eq!(view.focused_side, Side::Device);
+
+        // Navigating the device leaves PC-only mode.
+        view.activate_host_pane(cx);
+        assert!(view.host_only);
+        view.navigate_device("/sdcard".into(), cx);
+        assert!(!view.host_only);
+        assert!(!view.show_host_pane);
+        assert_eq!(view.focused_side, Side::Device);
     });
 }
 
@@ -1361,6 +1530,15 @@ fn bench_large_folder_render() {
         view.view_mode = crate::app::ViewMode::List
     });
     measure(&mut cx, handle, "list 5000");
+    view.update(&mut cx, |view, _| {
+        view.selected = view
+            .visible_entries(Side::Device)
+            .iter()
+            .take(2_500)
+            .map(|entry| entry.path.clone())
+            .collect();
+    });
+    measure(&mut cx, handle, "list 5000 selected");
 }
 
 #[test]
@@ -1569,16 +1747,44 @@ fn render_app_snapshot() {
         assert_eq!(view.host_pane_width, px(1120. - 212. - 5. - 300.));
         view.end_pane_resize(cx);
 
-        // The sidebar row opens and retracts the host pane.
+        // The sidebar row expands the PC pane, then returns to the device.
         view.show_host_pane = false;
+        view.host_only = false;
         view.focused_side = crate::model::Side::Device;
         view.activate_host_pane(cx);
         assert!(view.show_host_pane);
+        assert!(view.host_only);
         assert_eq!(view.focused_side, crate::model::Side::Host);
         view.activate_host_pane(cx);
         assert!(!view.show_host_pane);
+        assert!(!view.host_only);
         assert_eq!(view.focused_side, crate::model::Side::Device);
     });
+
+    // PC pane expanded over an attached device.
+    view.update(&mut cx, |view, cx| {
+        view.view_mode = crate::app::ViewMode::Grid;
+        view.show_host_pane = false;
+        view.host_only = false;
+        view.focused_side = crate::model::Side::Device;
+        view.activate_host_pane(cx);
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    })
+    .expect("render host-only frame");
+    let image = cx.capture_screenshot(handle).expect("capture host-only");
+    let (width, height) = image.dimensions();
+    let mut out =
+        std::fs::File::create("/tmp/androidfiles_host_only.ppm").expect("create snapshot");
+    write!(out, "P6\n{width} {height}\n255\n").expect("header");
+    for pixel in image.pixels() {
+        out.write_all(&[pixel[0], pixel[1], pixel[2]])
+            .expect("pixel");
+    }
+    out.flush().expect("flush");
+    eprintln!("wrote /tmp/androidfiles_host_only.ppm ({width}x{height})");
 
     // A fresh window: resizing headless does not re-run layout.
     let (narrow, narrow_view) = cx

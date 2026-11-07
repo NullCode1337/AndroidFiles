@@ -25,7 +25,7 @@ impl AppView {
             .min_h_0()
             .w_full()
             .child(self.render_sidebar(window, cx))
-            .when(self.selected_device.is_none(), |el| {
+            .when(self.selected_device.is_none() || self.host_only, |el| {
                 el.child(
                     div()
                         .flex_1()
@@ -34,7 +34,7 @@ impl AppView {
                         .child(self.render_file_pane(Side::Host, window, cx)),
                 )
             })
-            .when(self.selected_device.is_some(), |el| {
+            .when(self.selected_device.is_some() && !self.host_only, |el| {
                 el.when(self.show_host_pane, |el| {
                     el.child(
                         div()
@@ -82,17 +82,19 @@ impl AppView {
 
     /// Pane width, used to pick the list-column layout.
     fn pane_width(&self, side: Side, window: &Window) -> Pixels {
+        let viewport = window.viewport_size().width;
+        let full = (viewport - appearance::SIDEBAR_WIDTH).max(px(0.));
+        let split = self.selected_device.is_some() && !self.host_only && self.show_host_pane;
+        if !split {
+            return full;
+        }
         match side {
-            Side::Host => self.clamped_host_width(window.viewport_size().width),
-            Side::Device => {
-                let host = if self.show_host_pane {
-                    self.clamped_host_width(window.viewport_size().width)
-                        + appearance::PANE_DIVIDER_WIDTH
-                } else {
-                    px(0.)
-                };
-                (window.viewport_size().width - appearance::SIDEBAR_WIDTH - host).max(px(0.))
-            }
+            Side::Host => self.clamped_host_width(viewport),
+            Side::Device => (viewport
+                - appearance::SIDEBAR_WIDTH
+                - self.clamped_host_width(viewport)
+                - appearance::PANE_DIVIDER_WIDTH)
+                .max(px(0.)),
         }
     }
 
@@ -253,6 +255,8 @@ impl AppView {
                 }
             };
             let item_sizes = Rc::new(vec![size(pane_width, row_height); rows]);
+            // Computed once per pane render, not per virtual range.
+            let drag_selection: Arc<Vec<String>> = Arc::new(self.selected_paths(side));
 
             v_virtual_list(
                 cx.entity(),
@@ -260,8 +264,7 @@ impl AppView {
                 item_sizes,
                 move |this, range, _window, cx| {
                     let entries = this.visible_entries(side);
-                    // Shared by every row; cloning per row is quadratic.
-                    let drag_selection: Arc<Vec<String>> = Arc::new(this.selected_paths(side));
+                    let drag_selection = drag_selection.clone();
                     match mode {
                         ViewMode::List => range
                             .map(|ix| {
@@ -605,11 +608,6 @@ impl AppView {
         let name = entry.name.clone();
         let is_dir = entry.is_dir();
         let open_single = self.settings.open_on_single_click;
-        let drag_paths = if selected {
-            drag_selection.clone()
-        } else {
-            Arc::new(vec![path.clone()])
-        };
 
         h_flex()
             .id(ElementId::from(format!(
@@ -672,7 +670,7 @@ impl AppView {
                 el.on_drag(
                     DragPayload {
                         side,
-                        paths: drag_paths,
+                        paths: drag_selection.clone(),
                     },
                     move |payload, offset, _window, cx| {
                         cx.new(|_cx| DragGhost::new(payload.paths.len().to_string(), offset))
@@ -797,11 +795,6 @@ impl AppView {
         let name = entry.name.clone();
         let is_dir = entry.is_dir();
         let open_single = self.settings.open_on_single_click;
-        let drag_paths = if selected {
-            drag_selection.clone()
-        } else {
-            Arc::new(vec![path.clone()])
-        };
 
         // The artwork has different aspect ratios, so branch before building.
         let art: AnyElement = if is_dir {
@@ -872,7 +865,7 @@ impl AppView {
                 el.on_drag(
                     DragPayload {
                         side,
-                        paths: drag_paths,
+                        paths: drag_selection.clone(),
                     },
                     move |payload, offset, _window, cx| {
                         cx.new(|_cx| DragGhost::new(payload.paths.len().to_string(), offset))

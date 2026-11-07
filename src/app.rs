@@ -150,6 +150,8 @@ pub struct AppView {
 
     pub(crate) view_mode: ViewMode,
     pub(crate) show_host_pane: bool,
+    /// PC pane fills the main area, hiding the device pane.
+    pub(crate) host_only: bool,
     /// Until dragged, the split is equal and follows the window.
     pub(crate) host_pane_width: Pixels,
     /// Set once the divider is dragged.
@@ -222,6 +224,7 @@ impl AppView {
             backup_entries: Vec::new(),
             view_mode: ViewMode::Grid,
             show_host_pane: true,
+            host_only: true,
             host_pane_width: px(0.),
             host_pane_custom: false,
             pane_drag: None,
@@ -317,36 +320,41 @@ impl AppView {
         cx.notify();
     }
 
-    /// Toggles the host pane, keeping focus on a visible pane.
+    /// Toggles the split view when a device is attached.
     pub(crate) fn toggle_host_pane(&mut self, cx: &mut Context<Self>) {
         if self.selected_device.is_none() {
             self.show_host_pane = true;
+            self.host_only = true;
             self.focused_side = Side::Host;
             cx.notify();
             return;
         }
+        self.host_only = false;
         self.show_host_pane = !self.show_host_pane;
-        if !self.show_host_pane && self.focused_side == Side::Host {
-            self.focused_side = Side::Device;
-        }
+        self.focused_side = if self.show_host_pane {
+            Side::Host
+        } else {
+            Side::Device
+        };
         cx.notify();
     }
 
-    /// Opens the host pane, or retracts it when already focused.
+    /// Expands the PC pane, or returns to the device when already expanded.
     pub(crate) fn activate_host_pane(&mut self, cx: &mut Context<Self>) {
         if self.selected_device.is_none() {
             self.show_host_pane = true;
+            self.host_only = true;
             self.focused_side = Side::Host;
             cx.notify();
             return;
         }
-        if !self.show_host_pane {
-            self.show_host_pane = true;
-            self.focused_side = Side::Host;
-        } else if self.focused_side == Side::Host {
+        if self.host_only {
+            self.host_only = false;
             self.show_host_pane = false;
             self.focused_side = Side::Device;
         } else {
+            self.host_only = true;
+            self.show_host_pane = true;
             self.focused_side = Side::Host;
         }
         cx.notify();
@@ -504,9 +512,11 @@ impl AppView {
                     }
                     if self.selected_device.is_none() {
                         self.show_host_pane = true;
+                        self.host_only = true;
                         self.focused_side = Side::Host;
                     } else if !had_device {
                         self.show_host_pane = false;
+                        self.host_only = false;
                         self.focused_side = Side::Device;
                     }
                     changed = true;
@@ -771,6 +781,8 @@ impl AppView {
         self.device_back.clear();
         self.device_forward.clear();
         self.focused_side = Side::Device;
+        self.show_host_pane = false;
+        self.host_only = false;
         self.selected.clear();
         self.load_device_dir(cx);
         cx.notify();
@@ -917,14 +929,15 @@ impl AppView {
     }
 
     pub(crate) fn navigate_device(&mut self, path: String, cx: &mut Context<Self>) {
+        self.focused_side = Side::Device;
+        self.show_host_pane = false;
+        self.host_only = false;
         if path == self.device_cwd {
-            self.focused_side = Side::Device;
             cx.notify();
             return;
         }
         self.device_back.push(self.device_cwd.clone());
         self.device_forward.clear();
-        self.focused_side = Side::Device;
         self.set_device_dir(path, cx);
     }
 
@@ -953,6 +966,7 @@ impl AppView {
             self.navigate_device(device_path.to_string(), cx);
         } else if host_path.is_dir() {
             self.show_host_pane = true;
+            self.host_only = true;
             self.navigate_host(host_path, cx);
         } else {
             self.status_line = Some(format!("{label} is not available on this computer."));
@@ -2316,6 +2330,7 @@ impl AppView {
         self.selected.insert("/sdcard/Pictures".into());
         self.focused_side = Side::Device;
         self.show_host_pane = false;
+        self.host_only = false;
         self.bump_entries();
     }
 
@@ -2354,6 +2369,7 @@ impl AppView {
         self.device_entries.clear();
         self.device_cwd = "/sdcard".into();
         self.show_host_pane = true;
+        self.host_only = true;
         self.focused_side = Side::Host;
 
         self.host_cwd = std::path::PathBuf::from("/home/demo");

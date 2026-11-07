@@ -84,6 +84,9 @@ title bar → main (sidebar + host pane or device pane) → status bar
 
 With no device, the host pane fills the main area. With a device attached,
 the device pane fills it by default; opening the host pane splits the two.
+Clicking **This computer** expands the PC pane over the device (`host_only`),
+and clicking it again returns to the device. Selecting or navigating a device
+leaves PC-only mode.
 
 All device and host I/O happens on the background executor (`cx.spawn` +
 `background_executor().spawn`); results are applied in an entity update. Never
@@ -169,10 +172,10 @@ the handlers even when no child is focused. The context scope lets a focused
 input win on shared keys (delete, copy/cut/paste, alt-left/right) while
 app-only chords still fire.
 
-Settings, refresh, alt-up (navigate up), delete, copy/cut/paste, new folder
-(`shift-n`), new file (`n`), enter (rename), properties (`i`), hidden files
-(`ctrl-h`/`shift-h`) and host pane (`shift-b`), focus search (`f`),
-back/forward (alt-left/right).
+Settings (`ctrl-,`), refresh (`ctrl-r`), alt-up (navigate up), delete,
+copy/cut/paste, new folder (`ctrl-shift-n`), new file (`ctrl-n`), enter
+(rename), properties (`ctrl-i`), hidden files (`ctrl-h`/`ctrl-shift-h`), split
+view (`ctrl-shift-b`), focus search (`ctrl-f`), back/forward (alt-left/right).
 
 **Backspace is deliberately unbound.** Use alt-up to navigate up.
 
@@ -191,6 +194,9 @@ back/forward (alt-left/right).
   read with `.read(cx).value()`, and subscribe to `InputEvent::Change`.
 - Dialogs: `window.open_dialog(cx, ...)` with `.centered()` and
   `.entrance(DialogEntrance::FadeSlide)`. Assert with `window.has_active_dialog(cx)`.
+  Enter and Escape run the dialog's `on_ok`/`on_cancel`; a dialog with a custom
+  `.footer(...)` must also install `.on_ok(...)`, or Enter closes it without
+  running the footer action.
 - Use `cx.theme()` tokens for color. The only raw hex is the light palette in
   `appearance.rs`, where the last two digits are alpha.
 - Repeated elements need stable, domain-derived `ElementId`s, not indexes.
@@ -324,6 +330,7 @@ for frame in /tmp/androidfiles*.ppm; do ffmpeg -loglevel error -y -i "$frame" "$
 | `/tmp/androidfiles_split_list.ppm` | 1120×720 | list, split panes |
 | `/tmp/androidfiles_narrow_split_list.ppm` | 900×600 | list, split panes |
 | `/tmp/androidfiles_no_device.ppm` | 1100×700 | PC pane full, no phone attached |
+| `/tmp/androidfiles_host_only.ppm` | 1120×720 | PC pane full over an attached device |
 | `/tmp/androidfiles_long_path.ppm` | 1100×700 | deep host path so the bar wraps |
 | `/tmp/androidfiles_settings.ppm` | 1120×720 | settings dialog |
 | `/tmp/androidfiles_properties.ppm` | 1120×720 | properties dialog, copyable values |
@@ -378,7 +385,7 @@ sidebar routing to the selected device, right-click selection, settings dialog,
 properties dialog, backspace/delete editing the search field, ctrl-shift-n
 opening a dialog, multi-item clipboard, blank-space selection clearing,
 favorite reordering, transfer expiry, the pane scrollbars, sidebar scrolling,
-and the empty-paste toast.
+PC-only expansion over a device, and the empty-paste toast.
 
 ### What a correct frame looks like
 
@@ -412,6 +419,9 @@ and the empty-paste toast.
   shortcuts, quick locations target the PC, and device-only favorites are
   hidden. Stale listings are cleared, including in-flight loads that finish
   after the device goes away.
+- With a device attached, **This computer** expands the PC pane to the same
+  full width while the device pane is hidden; the device rows stay in the
+  sidebar so a click can bring the device back.
 - Status summary is left, item count is the far-right trailing item.
 
 ### Live capture
@@ -432,9 +442,9 @@ harness.
 cargo test --bin AndroidFiles bench_large_folder_render -- --ignored --nocapture
 ```
 
-It fills the device pane with 5,000 entries and prints per-frame cost for grid
-and list. A healthy build is roughly 1–3 ms per frame; hundreds of ms means
-rows are being rebuilt instead of virtualized.
+It fills the device pane with 5,000 entries and prints per-frame cost for grid,
+list, and list with half the rows selected. A healthy build is roughly 1–3 ms
+per frame; hundreds of ms means rows are being rebuilt instead of virtualized.
 
 ## Conventions
 

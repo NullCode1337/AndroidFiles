@@ -233,26 +233,26 @@ impl WirelessView {
         }
     }
 
-    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn submit(&mut self, cx: &mut Context<Self>) -> bool {
         let address = self.address.read(cx).value().trim().to_string();
         let port = self.port.read(cx).value().trim().to_string();
 
         if address.is_empty() || port.is_empty() {
             self.error = Some("Enter the device address and port.".into());
             cx.notify();
-            return;
+            return false;
         }
         let connect = format!("{address}:{port}");
         if let Err(error) = parse_wireless_address(&connect) {
             self.error = Some(error.into());
             cx.notify();
-            return;
+            return false;
         }
 
         self.app
             .update(cx, |app, cx| app.connect_wireless_device(connect, cx))
             .ok();
-        window.close_dialog(cx);
+        true
     }
 
     fn select_host(&mut self, address: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -447,7 +447,10 @@ impl Render for WirelessView {
                             .on_click({
                                 let this = this;
                                 move |_, window, cx| {
-                                    this.update(cx, |this, cx| this.submit(window, cx)).ok();
+                                    if this.update(cx, |this, cx| this.submit(cx)).unwrap_or(false)
+                                    {
+                                        window.close_dialog(cx);
+                                    }
                                 }
                             }),
                     ),
@@ -479,7 +482,7 @@ impl PairWirelessView {
         }
     }
 
-    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn submit(&mut self, cx: &mut Context<Self>) -> bool {
         let address = self.address.read(cx).value().trim().to_string();
         let port = self.port.read(cx).value().trim().to_string();
         let code = self.code.read(cx).value().trim().to_string();
@@ -487,24 +490,24 @@ impl PairWirelessView {
         if address.is_empty() || port.is_empty() {
             self.error = Some("Enter the pairing address and port.".into());
             cx.notify();
-            return;
+            return false;
         }
         let pairing = format!("{address}:{port}");
         if let Err(error) = parse_wireless_address(&pairing) {
             self.error = Some(error.into());
             cx.notify();
-            return;
+            return false;
         }
         if code.is_empty() {
             self.error = Some("Enter the pairing code shown on the phone.".into());
             cx.notify();
-            return;
+            return false;
         }
 
         self.app
             .update(cx, |app, cx| app.pair_wireless_device(pairing, code, cx))
             .ok();
-        window.close_dialog(cx);
+        true
     }
 }
 
@@ -575,8 +578,12 @@ impl Render for PairWirelessView {
                             .on_click({
                                 let this = this;
                                 move |_, window, cx| {
-                                    this.update(cx, |this, cx| this.submit(window, cx))
-                                        .ok();
+                                    if this
+                                        .update(cx, |this, cx| this.submit(cx))
+                                        .unwrap_or(false)
+                                    {
+                                        window.close_dialog(cx);
+                                    }
                                 }
                             }),
                     ),
@@ -660,8 +667,10 @@ impl AppView {
         let port = cx.new(|cx| InputState::new(window, cx).placeholder("Port"));
         let app = cx.weak_entity();
         let view = cx.new(|_cx| WirelessView::new(app, address.clone(), port.clone()));
+        let view_ok = view.downgrade();
         let initial_focus = Cell::new(true);
         window.open_dialog(cx, move |dialog, window, cx| {
+            let view_ok = view_ok.clone();
             if initial_focus.replace(false) {
                 let handle = address.read(cx).focus_handle(cx);
                 handle.focus(window, cx);
@@ -671,6 +680,11 @@ impl AppView {
                 .width(appearance::dialog_width(window.viewport_size().width))
                 .centered()
                 .entrance(DialogEntrance::FadeSlide)
+                .on_ok(move |_, _, cx| {
+                    view_ok
+                        .update(cx, |this, cx| this.submit(cx))
+                        .unwrap_or(false)
+                })
                 .child(view.clone())
         });
     }
@@ -686,8 +700,10 @@ impl AppView {
         let app = cx.weak_entity();
         let view =
             cx.new(|_cx| PairWirelessView::new(app, address.clone(), port.clone(), code.clone()));
+        let view_ok = view.downgrade();
         let initial_focus = Cell::new(true);
         window.open_dialog(cx, move |dialog, window, cx| {
+            let view_ok = view_ok.clone();
             if initial_focus.replace(false) {
                 let handle = address.read(cx).focus_handle(cx);
                 handle.focus(window, cx);
@@ -697,6 +713,11 @@ impl AppView {
                 .width(appearance::dialog_width(window.viewport_size().width))
                 .centered()
                 .entrance(DialogEntrance::FadeSlide)
+                .on_ok(move |_, _, cx| {
+                    view_ok
+                        .update(cx, |this, cx| this.submit(cx))
+                        .unwrap_or(false)
+                })
                 .child(view.clone())
         });
     }
@@ -709,13 +730,27 @@ impl AppView {
                 .placeholder("Auto-detect")
                 .default_value(default)
         });
+        let app_ok = app.clone();
+        let adb_ok = adb_input.clone();
         let view = cx.new(|_cx| SettingsView::new(app, adb_input));
         window.open_dialog(cx, move |dialog, window, _cx| {
+            let app_ok = app_ok.clone();
+            let adb_ok = adb_ok.clone();
             dialog
                 .title("Settings")
                 .width(appearance::dialog_width(window.viewport_size().width))
                 .centered()
                 .entrance(DialogEntrance::FadeSlide)
+                .on_ok(move |_, _, cx| {
+                    let raw = adb_ok.read(cx).value().to_string();
+                    let path = if raw.trim().is_empty() {
+                        None
+                    } else {
+                        Some(raw.trim().to_string())
+                    };
+                    app_ok.update(cx, |app, cx| app.set_adb_path(path, cx)).ok();
+                    true
+                })
                 .child(view.clone())
         });
     }
@@ -744,6 +779,16 @@ impl AppView {
                 ))
                 .centered()
                 .entrance(DialogEntrance::FadeSlide)
+                .on_ok({
+                    let this = this.clone();
+                    let input = input.clone();
+                    move |_, _, cx| {
+                        let name = input.read(cx).value().to_string();
+                        this.update(cx, |this, cx| this.create_entry(side, name, true, cx))
+                            .ok();
+                        true
+                    }
+                })
                 .child(Input::new(&input))
                 .footer(
                     h_flex()
@@ -804,6 +849,16 @@ impl AppView {
                 ))
                 .centered()
                 .entrance(DialogEntrance::FadeSlide)
+                .on_ok({
+                    let this = this.clone();
+                    let input = input.clone();
+                    move |_, _, cx| {
+                        let name = input.read(cx).value().to_string();
+                        this.update(cx, |this, cx| this.create_entry(side, name, false, cx))
+                            .ok();
+                        true
+                    }
+                })
                 .child(Input::new(&input))
                 .footer(
                     h_flex()
@@ -865,6 +920,16 @@ impl AppView {
                 ))
                 .centered()
                 .entrance(DialogEntrance::FadeSlide)
+                .on_ok({
+                    let this = this.clone();
+                    let input = input.clone();
+                    move |_, _, cx| {
+                        let name = input.read(cx).value().to_string();
+                        this.update(cx, |this, cx| this.rename_entry(side, name, cx))
+                            .ok();
+                        true
+                    }
+                })
                 .child(Input::new(&input))
                 .footer(
                     h_flex()
@@ -1051,6 +1116,19 @@ impl AppView {
                 .width(appearance::dialog_width(window.viewport_size().width))
                 .centered()
                 .entrance(DialogEntrance::FadeSlide)
+                .on_ok({
+                    let this = this.clone();
+                    let input = input.clone();
+                    let paths = paths.clone();
+                    move |_, _, cx| {
+                        let dest = input.read(cx).value().to_string();
+                        this.update(cx, |this, cx| {
+                            this.pull_paths_to(paths.clone(), PathBuf::from(dest), cx);
+                        })
+                        .ok();
+                        true
+                    }
+                })
                 .child(Input::new(&input))
                 .footer(
                     h_flex()
