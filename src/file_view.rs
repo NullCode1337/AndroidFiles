@@ -7,6 +7,7 @@ use std::sync::Arc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
+use gpui_kit::component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_kit::component::{ActiveTheme, Icon, h_flex, v_flex, v_virtual_list};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -212,6 +213,10 @@ impl AppView {
         let pane_width = self.pane_width(side, window);
         let mode = self.view_mode;
         let focused = self.focused_side == side;
+        let scroll = match side {
+            Side::Host => self.host_scroll.clone(),
+            Side::Device => self.device_scroll.clone(),
+        };
 
         // Only the visible slice is built each frame; a media folder would
         // otherwise lay out thousands of rows per repaint.
@@ -237,10 +242,6 @@ impl AppView {
                 }
             };
             let item_sizes = Rc::new(vec![size(pane_width, row_height); rows]);
-            let scroll = match side {
-                Side::Host => self.host_scroll.clone(),
-                Side::Device => self.device_scroll.clone(),
-            };
 
             v_virtual_list(
                 cx.entity(),
@@ -323,6 +324,7 @@ impl AppView {
             .child(
                 div()
                     .id(format!("{pane_id}-list"))
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .w_full()
@@ -363,6 +365,19 @@ impl AppView {
                     .when(self.drag_over == Some(side), move |el| el.bg(drop_bg))
                     .when(loading, |el| el.opacity(0.55))
                     .child(content)
+                    .child(
+                        Scrollbar::vertical(&scroll)
+                            .id(format!("{pane_id}-scrollbar"))
+                            .mode(ScrollbarMode::Always)
+                            .styles(|styles| {
+                                styles
+                                    .track(|track| track.width(px(8.)))
+                                    .thumb(|thumb| thumb.width(px(4.)).inset(px(2.)).radius(px(2.)))
+                                    .thumb_hover(|thumb| {
+                                        thumb.width(px(6.)).inset(px(1.)).radius(px(3.))
+                                    })
+                            }),
+                    )
                     .context_menu({
                         let this = this.clone();
                         move |menu, _w, _cx| {
