@@ -55,12 +55,20 @@ impl AppView {
                 )
                 .child(div().text_sm().child("Add wireless device")),
         );
-        let locations = self.selected_device.is_some().then(|| {
+        let devices = (!self.devices.is_empty()).then(|| {
             v_flex()
                 .w_full()
                 .flex_none()
-                .child(section_header("Locations", muted))
-                .child(self.render_locations(cx, muted, active, hover))
+                .child(section_header("Devices", muted))
+                .child(self.render_devices(cx, muted, active, hover))
+                .into_any_element()
+        });
+        let paths = self.selected_device.is_some().then(|| {
+            v_flex()
+                .w_full()
+                .flex_none()
+                .child(section_header("Paths", muted))
+                .child(self.render_paths(cx, muted, active, hover))
                 .into_any_element()
         });
 
@@ -129,7 +137,8 @@ impl AppView {
             .child(section_header("Favorites", muted))
             .child(self.render_quick_locations(cx, icon_color, active, hover))
             .child(self.render_favorites(cx, icon_color, active, hover))
-            .when_some(locations, |el, locations| el.child(locations))
+            .when_some(devices, |el, devices| el.child(devices))
+            .when_some(paths, |el, paths| el.child(paths))
             .when(self.devices.is_empty(), move |el| {
                 let refresh = this.clone();
                 el.child(
@@ -191,10 +200,10 @@ impl AppView {
                 let device_path = path.to_string();
                 let host_path = host_shortcut_path(label);
                 // Active for whichever pane is highlighted in this folder.
-                let is_active = if self.focused_side == Side::Host && self.show_host_pane {
-                    self.host_cwd == host_path
+                let is_active = if self.selected_device.is_some() {
+                    self.device_cwd == path
                 } else {
-                    self.focused_side == Side::Device && self.device_cwd == path
+                    self.show_host_pane && self.host_cwd == host_path
                 };
                 let target = host_shortcut_path(label);
                 nav_row(
@@ -224,75 +233,64 @@ impl AppView {
         active: Hsla,
         hover: Hsla,
     ) -> impl IntoElement {
-        if self.selected_device.is_none() || self.focused_side == Side::Host {
+        if self.selected_device.is_none() {
             return v_flex();
         }
         let this = cx.weak_entity();
         let add_this = this.clone();
         let muted = cx.theme().muted_foreground;
-        let current = self.selected_device.clone();
+        let device = self.selected_device.clone();
+        let favorites: Vec<_> = self
+            .settings
+            .favorites
+            .iter()
+            .enumerate()
+            .filter(|(_, favorite)| device.as_deref() == Some(favorite.device_serial.as_str()))
+            .collect();
 
         v_flex()
             .w_full()
             .flex_none()
             .px(px(8.))
             .gap(px(1.))
-            .when(!self.settings.favorites.is_empty(), move |el| {
-                el.children(
-                    self.settings
-                        .favorites
-                        .iter()
-                        .enumerate()
-                        .map(move |(index, fav)| {
-                            let click = this.clone();
-                            let drop = this.clone();
-                            let serial = fav.device_serial.clone();
-                            let path = fav.path.clone();
-                            let name = fav.name.clone();
-                            let drag_name = name.clone();
-                            let is_active = current.as_deref() == Some(serial.as_str())
-                                && self.focused_side == Side::Device
-                                && self.device_cwd == path;
-                            nav_row(
-                                format!("fav-{serial}-{path}"),
-                                name,
-                                IconName::Folder,
-                                NavRowColors {
-                                    icon: icon_color,
-                                    active,
-                                    hover,
-                                },
-                                is_active,
-                                {
-                                    let path = path.clone();
-                                    let serial = serial.clone();
-                                    move |_, _, cx| {
-                                        click
-                                            .update(cx, |this, cx| {
-                                                if this.selected_device.as_deref()
-                                                    != Some(serial.as_str())
-                                                {
-                                                    this.select_device(serial.clone(), cx);
-                                                }
-                                                this.navigate_device(path.clone(), cx);
-                                            })
-                                            .ok();
-                                    }
-                                },
-                            )
-                            .on_drag(FavoriteDrag { index }, move |_, _, _, cx| {
-                                cx.new(|_cx| DragGhost::new(drag_name.clone()))
-                            })
-                            .on_drop::<FavoriteDrag>(
-                                move |payload, _, cx| {
-                                    drop.update(cx, |this, cx| {
-                                        this.reorder_favorite(payload.index, index, cx)
-                                    })
+            .when(!favorites.is_empty(), move |el| {
+                el.children(favorites.into_iter().map(move |(index, fav)| {
+                    let click = this.clone();
+                    let drop = this.clone();
+                    let serial = fav.device_serial.clone();
+                    let path = fav.path.clone();
+                    let name = fav.name.clone();
+                    let drag_name = name.clone();
+                    let is_active = self.focused_side == Side::Device && self.device_cwd == path;
+                    nav_row(
+                        format!("fav-{serial}-{path}"),
+                        name,
+                        IconName::Folder,
+                        NavRowColors {
+                            icon: icon_color,
+                            active,
+                            hover,
+                        },
+                        is_active,
+                        {
+                            let path = path.clone();
+                            move |_, _, cx| {
+                                click
+                                    .update(cx, |this, cx| this.navigate_device(path.clone(), cx))
                                     .ok();
-                                },
-                            )
-                        }),
-                )
+                            }
+                        },
+                    )
+                    .on_drag(FavoriteDrag { index }, move |_, _, _, cx| {
+                        cx.new(|_cx| DragGhost::new(drag_name.clone()))
+                    })
+                    .on_drop::<FavoriteDrag>(move |payload, _, cx| {
+                        drop.update(cx, |this, cx| {
+                            this.reorder_favorite(payload.index, index, cx)
+                        })
+                        .ok();
+                    })
+                }))
             })
             .child(
                 div()
@@ -318,7 +316,7 @@ impl AppView {
             )
     }
 
-    fn render_locations(
+    fn render_devices(
         &self,
         cx: &mut Context<Self>,
         muted: Hsla,
@@ -326,12 +324,12 @@ impl AppView {
         hover: Hsla,
     ) -> impl IntoElement {
         let this = cx.weak_entity();
-
         let mut rows: Vec<AnyElement> = Vec::new();
 
         for device in &self.devices {
             let serial = device.serial.clone();
             let label = device_label(&device.model, &device.serial);
+            let is_selected = self.selected_device.as_deref() == Some(serial.as_str());
             let wireless = device.wireless_serial.clone();
             let disconnect_name = if device.model.is_empty() {
                 serial.clone()
@@ -352,7 +350,8 @@ impl AppView {
                     .px(px(8.))
                     .gap(px(4.))
                     .rounded(px(6.))
-                    .hover(move |s| s.bg(hover))
+                    .when(is_selected, move |el| el.bg(active))
+                    .when(!is_selected, move |el| el.hover(move |s| s.bg(hover)))
                     .child(
                         h_flex()
                             .id(format!("device-select-{serial}"))
@@ -364,7 +363,8 @@ impl AppView {
                             .on_click(move |_, _, cx| {
                                 select
                                     .update(cx, |this, cx| {
-                                        this.select_device(select_serial.clone(), cx)
+                                        this.select_device(select_serial.clone(), cx);
+                                        this.navigate_device("/sdcard".into(), cx);
                                     })
                                     .ok();
                             })
@@ -412,6 +412,24 @@ impl AppView {
                     .into_any_element(),
             );
         }
+
+        v_flex()
+            .w_full()
+            .flex_none()
+            .px(px(8.))
+            .gap(px(1.))
+            .children(rows)
+    }
+
+    fn render_paths(
+        &self,
+        cx: &mut Context<Self>,
+        muted: Hsla,
+        active: Hsla,
+        hover: Hsla,
+    ) -> impl IntoElement {
+        let this = cx.weak_entity();
+        let mut rows: Vec<AnyElement> = Vec::new();
 
         for (id, label, path) in [
             ("root", "/", "/"),

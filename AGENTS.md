@@ -310,7 +310,7 @@ for frame in /tmp/androidfiles*.ppm; do ffmpeg -loglevel error -y -i "$frame" "$
 | `/tmp/androidfiles_settings.ppm` | 1120×720 | settings dialog |
 | `/tmp/androidfiles_properties.ppm` | 1120×720 | properties dialog, copyable values |
 | `/tmp/androidfiles_wireless.ppm` | 1120×720 | add wireless device dialog |
-| `/tmp/androidfiles_sidebar_devices.ppm` | 1120×720 | USB + wireless device rows, root shortcuts |
+| `/tmp/androidfiles_sidebar_devices.ppm` | 1120×720 | two devices, selected row, Paths shortcuts |
 | `/tmp/androidfiles_sidebar_transfers.ppm` | 1120×720 | sidebar scrolled through many transfers |
 | `/tmp/androidfiles_disconnected.ppm` | 1120×720 | device removed after a loaded folder |
 | `/tmp/androidfiles_pair_wireless.ppm` | 1120×720 | standalone pairing dialog |
@@ -356,10 +356,10 @@ Tests must not call `Settings::save`; it writes the real user config. Exercise
 pure settings helpers instead.
 
 Covered: title-bar drag vs. toolbar press, divider drag, empty-device listing,
-sidebar routing to the highlighted pane, right-click selection, settings
-dialog, properties dialog, backspace/delete editing the search field,
-ctrl-shift-n opening a dialog, favorite reordering, transfer expiry, the pane
-scrollbars, and sidebar scrolling.
+sidebar routing to the selected device, right-click selection, settings dialog,
+properties dialog, backspace/delete editing the search field, ctrl-shift-n
+opening a dialog, favorite reordering, transfer expiry, the pane scrollbars,
+and sidebar scrolling.
 
 ### What a correct frame looks like
 
@@ -367,9 +367,14 @@ scrollbars, and sidebar scrolling.
 - Title bar spans the full width; window controls follow the setting.
 - Every pane has a path bar above its listing; the focused pane's bar is tinted
   and its crumbs navigate; crumbs wrap and never paint over the other pane.
-- Sidebar shortcuts target the highlighted pane.
-- Device Locations end with exactly `/` and `/sdcard`; `/sdcard` maps to
-  `/storage/emulated/0`. Device rows show the model (serial only as fallback).
+- Sidebar shortcuts target the selected device; with no device they target the
+  PC.
+- **Devices** lists every attached device and highlights the selected one.
+  Clicking a device selects it and opens its internal storage. The only device
+  is selected automatically.
+- **Paths** contains exactly `/` and `/sdcard` (`/storage/emulated/0`) for the
+  selected device. Device rows show the model (serial only as fallback).
+  Favorites are filtered to the selected device.
 - **Add wireless device** sits at the bottom of the sidebar, centred.
 - Favorite rows can be dragged onto another favorite row to reorder them;
   the order is saved immediately. Finished transfers disappear five seconds
@@ -382,11 +387,10 @@ scrollbars, and sidebar scrolling.
   Until dragged the split is equal and follows the window; afterwards the
   chosen width is clamped so the device pane keeps `MIN_DEVICE_PANE_WIDTH`.
 - With no device, the PC pane fills the main area; the device path bar,
-  Internal storage, and Locations disappear. Favorites stays for host
-  shortcuts. Quick locations follow the highlighted pane, falling back to the
-  PC with no device. Device-only favorites are hidden with no device or while
-  the host pane is active. Stale listings are cleared, including in-flight
-  loads that finish after the device goes away.
+  Internal storage, Devices, and Paths disappear. Favorites stays for host
+  shortcuts, quick locations target the PC, and device-only favorites are
+  hidden. Stale listings are cleared, including in-flight loads that finish
+  after the device goes away.
 - Status summary is left, item count is the far-right trailing item.
 
 ### Live capture

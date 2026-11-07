@@ -947,20 +947,14 @@ impl AppView {
         host_path: PathBuf,
         cx: &mut Context<Self>,
     ) {
-        if self.selected_device.is_none()
-            || (self.show_host_pane && self.focused_side == Side::Host)
-        {
-            if host_path.is_dir() {
-                if self.selected_device.is_none() {
-                    self.show_host_pane = true;
-                }
-                self.navigate_host(host_path, cx);
-            } else {
-                self.status_line = Some(format!("{label} is not available on this computer."));
-                cx.notify();
-            }
-        } else {
+        if self.selected_device.is_some() {
             self.navigate_device(device_path.to_string(), cx);
+        } else if host_path.is_dir() {
+            self.show_host_pane = true;
+            self.navigate_host(host_path, cx);
+        } else {
+            self.status_line = Some(format!("{label} is not available on this computer."));
+            cx.notify();
         }
     }
 

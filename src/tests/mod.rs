@@ -451,12 +451,20 @@ fn sidebar_handles_usb_and_wireless_devices() {
     view.update(&mut cx, |view, _| {
         view.load_demo_snapshot_state();
         let serial = "adb-RFAX41Q89WZ-GDeqAX._adb-tls-connect._tcp";
-        view.devices = vec![DeviceInfo {
-            serial: serial.into(),
-            model: "SM-R940".into(),
-            state: DeviceStateInfo::Connected,
-            wireless_serial: Some(serial.into()),
-        }];
+        view.devices = vec![
+            DeviceInfo {
+                serial: serial.into(),
+                model: "SM-R940".into(),
+                state: DeviceStateInfo::Connected,
+                wireless_serial: Some(serial.into()),
+            },
+            DeviceInfo {
+                serial: "emulator-5554".into(),
+                model: "Pixel 8".into(),
+                state: DeviceStateInfo::Connected,
+                wireless_serial: None,
+            },
+        ];
         view.selected_device = Some(serial.into());
     });
 
@@ -1046,7 +1054,7 @@ fn backspace_edits_the_toolbar_search() {
 
 /// Shortcuts move whichever pane is highlighted.
 #[test]
-fn sidebar_shortcuts_follow_the_highlighted_pane() {
+fn sidebar_shortcuts_follow_the_selected_device() {
     let mut cx = HeadlessAppContext::with_platform(
         gpui_kit::platform::current_platform(true).text_system(),
         Arc::new(gpui_kit::assets::AllAssets),
@@ -1093,15 +1101,14 @@ fn sidebar_shortcuts_follow_the_highlighted_pane() {
         view.focused_side = Side::Host;
         view.open_location("Downloads", "/sdcard/Download", temp.clone(), cx);
         assert_eq!(
-            view.host_cwd, temp,
-            "highlighted host pane wins with a device"
+            view.device_cwd, "/sdcard/Download",
+            "a selected device wins over the highlighted host pane"
         );
-        assert_eq!(view.focused_side, Side::Host);
+        assert_eq!(view.focused_side, Side::Device);
 
-        view.focused_side = Side::Device;
         let host = view.host_cwd.clone();
-        view.open_location("Downloads", "/sdcard/Download", temp, cx);
-        assert_eq!(view.device_cwd, "/sdcard/Download");
+        view.open_location("Pictures", "/sdcard/Pictures", temp, cx);
+        assert_eq!(view.device_cwd, "/sdcard/Pictures");
         assert_eq!(
             view.host_cwd, host,
             "device navigation leaves the host pane"
