@@ -12,6 +12,19 @@ pub const MIN_HOST_PANE_WIDTH: Pixels = px(200.);
 pub const MIN_DEVICE_PANE_WIDTH: Pixels = px(300.);
 pub const COMPACT_LIST_WIDTH: Pixels = px(480.);
 
+/// Dialogs follow the window so they do not look cramped on large screens.
+pub fn dialog_width(view_width: Pixels) -> Pixels {
+    scaled_dialog_width(view_width, 0.58, 560., 820.)
+}
+
+pub fn compact_dialog_width(view_width: Pixels) -> Pixels {
+    scaled_dialog_width(view_width, 0.44, 360., 600.)
+}
+
+fn scaled_dialog_width(view_width: Pixels, ratio: f32, min: f32, max: f32) -> Pixels {
+    px((view_width.as_f32() * ratio).clamp(min, max))
+}
+
 pub const LIST_ROW_HEIGHT: f32 = 26.;
 pub const GRID_TILE_WIDTH: f32 = 118.;
 pub const GRID_TILE_HEIGHT: f32 = 124.;

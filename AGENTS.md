@@ -163,6 +163,7 @@ characters. Keep it free; use alt-up.
 - Text is not selectable in this gpui version. The properties dialog makes
   values copyable with borderless, read-only `Input`s
   (`.readonly(true).appearance(false).bordered(false).focus_bordered(false).small()`).
+  The path value uses a read-only `Textarea` with `auto_grow` so long paths wrap.
 - Inputs are stateful: hold `Entity<InputState>`, render with `Input::new(&state)`,
   read with `.read(cx).value()`, and subscribe to `InputEvent::Change`.
 - Dialogs: `window.open_dialog(cx, ...)` with `.centered()` and
@@ -187,8 +188,9 @@ Fields: `theme`, `window_controls`, `translucent_window`, `adb_path`,
 `open_on_single_click`, `confirm_before_delete`, `default_download_folder`,
 `favorites`.
 
-`concurrent_transfers` and `scrcpy_path` are persisted but not yet used by any
-code path.
+`concurrent_transfers` is persisted but not yet used by any code path.
+`scrcpy_path` overrides the binary launched by the toolbar screen-mirror
+button; that launch is refused unless the selected device is ready.
 
 ## adb backend
 

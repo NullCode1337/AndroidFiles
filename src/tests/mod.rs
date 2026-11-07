@@ -133,11 +133,7 @@ fn properties_dialog_text_is_copyable() {
             )
         })
         .expect("open headless window");
-    view.update(&mut cx, |view, _| {
-        view.load_demo_snapshot_state();
-        view.selected.clear();
-        view.selected.insert("/sdcard/Pictures".into());
-    });
+    view.update(&mut cx, |view, _| view.load_properties_demo_state());
 
     cx.update_window(handle, |_, window, cx| {
         view.update(cx, |view, cx| view.open_properties_dialog(window, cx));
@@ -167,6 +163,44 @@ fn properties_dialog_text_is_copyable() {
             .expect("pixel");
     }
     out.flush().expect("flush");
+}
+
+#[test]
+fn scrcpy_refuses_without_a_connected_device() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (_handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.scrcpy".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, _| view.load_host_only_demo_state());
+    view.update(&mut cx, |view, cx| view.launch_scrcpy(cx));
+
+    let status = cx.update(|cx| view.read(cx).status_line.clone());
+    assert_eq!(
+        status.as_deref(),
+        Some("Connect a device before starting screen mirroring.")
+    );
 }
 
 #[test]

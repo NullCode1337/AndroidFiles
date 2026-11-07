@@ -5,12 +5,13 @@ use std::path::PathBuf;
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogEntrance;
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::*;
 
 use crate::app::AppView;
+use crate::appearance;
 use crate::format::{format_date, format_mode, format_size};
 use crate::model::{EntryKind, Side};
 use crate::settings::{ThemePref, WindowControlsPref};
@@ -268,10 +269,10 @@ impl AppView {
                 .default_value(default)
         });
         let view = cx.new(|_cx| SettingsView::new(app, adb_input));
-        window.open_dialog(cx, move |dialog, _window, _cx| {
+        window.open_dialog(cx, move |dialog, window, _cx| {
             dialog
                 .title("Settings")
-                .width(px(560.))
+                .width(appearance::dialog_width(window.viewport_size().width))
                 .centered()
                 .entrance(DialogEntrance::FadeSlide)
                 .child(view.clone())
@@ -297,7 +298,9 @@ impl AppView {
                     Side::Host => "New folder on this computer",
                     Side::Device => "New folder on device",
                 })
-                .width(px(360.))
+                .width(appearance::compact_dialog_width(
+                    window.viewport_size().width,
+                ))
                 .centered()
                 .entrance(DialogEntrance::FadeSlide)
                 .child(Input::new(&input))
@@ -355,7 +358,9 @@ impl AppView {
                     Side::Host => "New file on this computer",
                     Side::Device => "New file on device",
                 })
-                .width(px(360.))
+                .width(appearance::compact_dialog_width(
+                    window.viewport_size().width,
+                ))
                 .centered()
                 .entrance(DialogEntrance::FadeSlide)
                 .child(Input::new(&input))
@@ -414,7 +419,9 @@ impl AppView {
             }
             dialog
                 .title("Rename")
-                .width(px(360.))
+                .width(appearance::compact_dialog_width(
+                    window.viewport_size().width,
+                ))
                 .centered()
                 .entrance(DialogEntrance::FadeSlide)
                 .child(Input::new(&input))
@@ -472,11 +479,14 @@ impl AppView {
             )
         };
         let this = cx.weak_entity();
-        window.open_alert_dialog(cx, move |alert, _window, _cx| {
+        window.open_alert_dialog(cx, move |alert, window, _cx| {
             alert
                 .title(format!(
                     "Delete {count} item{}?",
                     if count == 1 { "" } else { "s" }
+                ))
+                .width(appearance::compact_dialog_width(
+                    window.viewport_size().width,
                 ))
                 .description(format!("This will permanently delete: {preview}"))
                 .confirm()
@@ -533,24 +543,32 @@ impl AppView {
             ),
         ];
         // Read-only inputs keep values selectable without an editable form.
-        let inputs = rows
+        let fields = rows
             .iter()
-            .map(|(_, value)| {
+            .map(|(label, value)| {
                 let value = value.clone();
-                cx.new(|cx| InputState::new(window, cx).default_value(value))
+                if *label == "Path" {
+                    PropField::Wrapped(cx.new(|cx| {
+                        TextareaState::new(window, cx)
+                            .default_value(value)
+                            .auto_grow(1, 5)
+                    }))
+                } else {
+                    PropField::Text(cx.new(|cx| InputState::new(window, cx).default_value(value)))
+                }
             })
             .collect::<Vec<_>>();
-        window.open_dialog(cx, move |dialog, _window, _cx| {
+        window.open_dialog(cx, move |dialog, window, _cx| {
             dialog
                 .title("Properties")
-                .width(px(440.))
+                .width(appearance::dialog_width(window.viewport_size().width))
                 .centered()
                 .entrance(DialogEntrance::FadeSlide)
                 .child(
                     v_flex().gap_1().children(
                         rows.iter()
-                            .zip(inputs.iter())
-                            .map(|((label, _), input)| prop_row(label, input.clone())),
+                            .zip(fields.iter())
+                            .map(|((label, _), field)| prop_row(label, field.clone())),
                     ),
                 )
                 .footer(
@@ -590,7 +608,7 @@ impl AppView {
             }
             dialog
                 .title("Pull to…")
-                .width(px(440.))
+                .width(appearance::dialog_width(window.viewport_size().width))
                 .centered()
                 .entrance(DialogEntrance::FadeSlide)
                 .child(Input::new(&input))
@@ -626,13 +644,17 @@ impl AppView {
     }
 }
 
-fn prop_row(label: &'static str, input: Entity<InputState>) -> impl IntoElement {
-    h_flex()
-        .w_full()
-        .items_center()
-        .gap_2()
-        .child(div().w_24().flex_none().text_sm().child(label))
-        .child(
+#[derive(Clone)]
+enum PropField {
+    Text(Entity<InputState>),
+    Wrapped(Entity<TextareaState>),
+}
+
+fn prop_row(label: &'static str, field: PropField) -> impl IntoElement {
+    let row = h_flex().w_full().gap_2();
+    let label = div().w_24().flex_none().text_sm().child(label);
+    match field {
+        PropField::Text(input) => row.items_center().child(label).child(
             div().flex_1().min_w_0().child(
                 Input::new(&input)
                     .readonly(true)
@@ -641,5 +663,15 @@ fn prop_row(label: &'static str, input: Entity<InputState>) -> impl IntoElement 
                     .focus_bordered(false)
                     .small(),
             ),
-        )
+        ),
+        PropField::Wrapped(input) => row.items_start().child(label.pt(px(3.))).child(
+            div().flex_1().min_w_0().child(
+                Textarea::new(&input)
+                    .readonly(true)
+                    .appearance(false)
+                    .bordered(false)
+                    .small(),
+            ),
+        ),
+    }
 }

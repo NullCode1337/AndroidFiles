@@ -532,6 +532,47 @@ impl AppView {
         self.devices.iter().find(|d| &d.serial == serial)
     }
 
+    fn connected_device(&self) -> Option<&DeviceInfo> {
+        self.selected_device_info()
+            .filter(|device| device.state.is_ready())
+    }
+
+    pub(crate) fn launch_scrcpy(&mut self, cx: &mut Context<Self>) {
+        let Some(serial) = self.connected_device().map(|device| device.serial.clone()) else {
+            self.status_line =
+                Some("Connect a device before starting screen mirroring.".to_string());
+            cx.notify();
+            return;
+        };
+        let program = self
+            .settings
+            .scrcpy_path
+            .clone()
+            .filter(|path| !path.trim().is_empty())
+            .unwrap_or_else(|| "scrcpy".to_string());
+
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    std::process::Command::new(program)
+                        .arg("--serial")
+                        .arg(serial)
+                        .spawn()
+                        .map(|_| ())
+                })
+                .await;
+            if let Err(error) = result {
+                this.update(cx, |this, cx| {
+                    this.status_line = Some(format!("Couldn't launch scrcpy: {error}"));
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     pub fn load_host_dir(&mut self, cx: &mut Context<Self>) {
         let path = self.host_cwd.clone();
         self.host_loading = true;
@@ -1808,6 +1849,22 @@ impl AppView {
                             })),
                     )
                     .child(
+                        Button::new("scrcpy")
+                            .ghost()
+                            .small()
+                            .rounded(px(14.))
+                            .w(px(28.))
+                            .h(px(28.))
+                            .icon(Icon::new(IconName::MonitorSmartphone).small())
+                            .tooltip(if self.connected_device().is_some() {
+                                "Mirror screen"
+                            } else {
+                                "Connect a device to mirror its screen"
+                            })
+                            .disabled(self.connected_device().is_none())
+                            .on_click(cx.listener(|this, _, _, cx| this.launch_scrcpy(cx))),
+                    )
+                    .child(
                         Button::new("settings")
                             .ghost()
                             .small()
@@ -1977,6 +2034,22 @@ impl AppView {
         self.selected.insert("/sdcard/Pictures".into());
         self.focused_side = Side::Device;
         self.bump_entries();
+    }
+
+    /// A selected entry whose path has to wrap inside Properties.
+    #[cfg(test)]
+    pub(crate) fn load_properties_demo_state(&mut self) {
+        self.load_demo_snapshot_state();
+        let path = "/sdcard/Pictures/2026/November/Vacation photos with a long folder name/DCIM";
+        if let Some(entry) = self
+            .device_entries
+            .iter_mut()
+            .find(|entry| entry.name == "Pictures")
+        {
+            entry.path = path.into();
+        }
+        self.selected.clear();
+        self.selected.insert(path.into());
     }
 
     /// No phone attached, second pane open.
