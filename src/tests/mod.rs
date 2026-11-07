@@ -8,8 +8,8 @@ use std::sync::Arc;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{
     AppContext, Bounds, Focusable as _, HeadlessAppContext, Keystroke, Modifiers, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, WindowBounds, WindowOptions,
-    point, px, size,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, ScrollDelta, ScrollEvent,
+    ScrollSource, TouchPhase, WindowBounds, WindowOptions, point, px, size,
 };
 
 use crate::app::AppView;
@@ -655,6 +655,236 @@ fn titlebar_buttons_do_not_start_a_drag() {
 }
 
 /// The empty device pane must not blank the host listing.
+#[test]
+fn favorites_can_be_reordered() {
+    use crate::model::{Favorite, reorder_favorites};
+
+    let mut favorites = vec![
+        Favorite {
+            device_serial: "DEMO123".into(),
+            path: "/sdcard/A".into(),
+            name: "A".into(),
+        },
+        Favorite {
+            device_serial: "DEMO123".into(),
+            path: "/sdcard/B".into(),
+            name: "B".into(),
+        },
+        Favorite {
+            device_serial: "DEMO123".into(),
+            path: "/sdcard/C".into(),
+            name: "C".into(),
+        },
+    ];
+
+    assert!(reorder_favorites(&mut favorites, 0, 2));
+    let names: Vec<_> = favorites
+        .iter()
+        .map(|favorite| favorite.name.as_str())
+        .collect();
+    assert_eq!(names, ["B", "C", "A"]);
+    assert!(!reorder_favorites(&mut favorites, 2, 2));
+}
+
+#[test]
+fn right_click_selects_unselected_rows_and_keeps_multiselection() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (_handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.context-select".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, cx| {
+        view.load_demo_snapshot_state();
+        view.selected.clear();
+        view.selected.insert("/sdcard/Documents".into());
+        view.selected.insert("/sdcard/Music".into());
+        view.select_for_context_menu("/sdcard/Pictures", Side::Device, cx);
+        assert_eq!(view.selected.len(), 1);
+        assert!(view.selected.contains("/sdcard/Pictures"));
+
+        view.selected.insert("/sdcard/Music".into());
+        view.select_for_context_menu("/sdcard/Pictures", Side::Device, cx);
+        assert_eq!(view.selected.len(), 2);
+        assert!(view.selected.contains("/sdcard/Music"));
+    });
+}
+
+#[test]
+fn finished_transfers_expire() {
+    use crate::model::{TransferDirection, TransferProgress};
+    use std::time::{Duration, Instant};
+
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (_handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.transfer-expiry".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, _| {
+        view.transfers = vec![
+            TransferProgress {
+                id: 1,
+                name: "old".into(),
+                direction: TransferDirection::Push,
+                bytes_done: 1,
+                bytes_total: 1,
+                done: true,
+                failed: false,
+                error: None,
+                started: chrono::Utc::now(),
+                finished_at: Some(Instant::now() - Duration::from_secs(10)),
+            },
+            TransferProgress {
+                id: 2,
+                name: "recent".into(),
+                direction: TransferDirection::Push,
+                bytes_done: 1,
+                bytes_total: 1,
+                done: true,
+                failed: false,
+                error: None,
+                started: chrono::Utc::now(),
+                finished_at: Some(Instant::now()),
+            },
+            TransferProgress {
+                id: 3,
+                name: "running".into(),
+                direction: TransferDirection::Push,
+                bytes_done: 0,
+                bytes_total: 1,
+                done: false,
+                failed: false,
+                error: None,
+                started: chrono::Utc::now(),
+                finished_at: None,
+            },
+        ];
+        assert!(view.prune_finished_transfers());
+        let names: Vec<_> = view.transfers.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["recent", "running"]);
+        assert!(!view.prune_finished_transfers());
+    });
+}
+
+#[test]
+fn sidebar_scrolls_with_many_transfers() {
+    use crate::model::{TransferDirection, TransferProgress};
+
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.sidebar-scroll".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, _| {
+        view.load_demo_snapshot_state();
+        view.transfers = (0..40)
+            .map(|id| TransferProgress {
+                id,
+                name: format!("item-{id}.jpg"),
+                direction: TransferDirection::Push,
+                bytes_done: id,
+                bytes_total: 100,
+                done: false,
+                failed: false,
+                error: None,
+                started: chrono::Utc::now(),
+                finished_at: None,
+            })
+            .collect();
+    });
+
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+        window.dispatch_event(
+            PlatformInput::Scroll(ScrollEvent {
+                position: point(px(100.), px(600.)),
+                delta: ScrollDelta::Lines(point(0., -5.)),
+                modifiers: Modifiers::none(),
+                touch_phase: TouchPhase::Moved,
+                source: ScrollSource::Pointer,
+            }),
+            cx,
+        );
+        window.refresh();
+        window.draw(cx).clear(cx);
+    })
+    .expect("scroll the sidebar");
+
+    let image = cx.capture_screenshot(handle).expect("capture sidebar");
+    let (width, height) = image.dimensions();
+    let mut out = std::fs::File::create("/tmp/androidfiles_sidebar_transfers.ppm")
+        .expect("create sidebar transfers snapshot");
+    write!(out, "P6\n{width} {height}\n255\n").expect("header");
+    for pixel in image.pixels() {
+        out.write_all(&[pixel[0], pixel[1], pixel[2]])
+            .expect("pixel");
+    }
+    out.flush().expect("flush");
+}
+
 #[test]
 fn disconnect_clears_loaded_device_folder() {
     let mut cx = HeadlessAppContext::with_platform(

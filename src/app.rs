@@ -208,13 +208,13 @@ impl AppView {
             device_entries: Vec::new(),
             device_loading: false,
             selected: HashSet::new(),
-            focused_side: Side::Device,
+            focused_side: Side::Host,
             clipboard: None,
             transfers: Vec::new(),
             next_transfer_id: 0,
             backup_entries: Vec::new(),
             view_mode: ViewMode::Grid,
-            show_host_pane: false,
+            show_host_pane: true,
             host_pane_width: px(0.),
             host_pane_custom: false,
             pane_drag: None,
@@ -287,6 +287,7 @@ impl AppView {
         ]);
 
         this.spawn_poller(cx);
+        this.spawn_transfer_cleanup(cx);
         this.load_host_dir(cx);
         window.focus(&this.focus_handle, cx);
         this
@@ -309,6 +310,12 @@ impl AppView {
 
     /// Toggles the host pane, keeping focus on a visible pane.
     pub(crate) fn toggle_host_pane(&mut self, cx: &mut Context<Self>) {
+        if self.selected_device.is_none() {
+            self.show_host_pane = true;
+            self.focused_side = Side::Host;
+            cx.notify();
+            return;
+        }
         self.show_host_pane = !self.show_host_pane;
         if !self.show_host_pane && self.focused_side == Side::Host {
             self.focused_side = Side::Device;
@@ -318,6 +325,12 @@ impl AppView {
 
     /// Opens the host pane, or retracts it when already focused.
     pub(crate) fn activate_host_pane(&mut self, cx: &mut Context<Self>) {
+        if self.selected_device.is_none() {
+            self.show_host_pane = true;
+            self.focused_side = Side::Host;
+            cx.notify();
+            return;
+        }
         if !self.show_host_pane {
             self.show_host_pane = true;
             self.focused_side = Side::Host;
@@ -447,6 +460,7 @@ impl AppView {
             }
             PollEvent::Devices(devices) => {
                 if devices != self.devices {
+                    let had_device = !self.devices.is_empty();
                     let was_ready = self
                         .selected_device_info()
                         .is_some_and(|d| d.state.is_ready());
@@ -485,6 +499,13 @@ impl AppView {
                         self.error = None;
                         self.device_loading = false;
                         self.bump_entries();
+                    }
+                    if self.selected_device.is_none() {
+                        self.show_host_pane = true;
+                        self.focused_side = Side::Host;
+                    } else if !had_device {
+                        self.show_host_pane = false;
+                        self.focused_side = Side::Device;
                     }
                     changed = true;
                 }
@@ -1448,6 +1469,33 @@ impl AppView {
         cx.notify();
     }
 
+    pub(crate) fn prune_finished_transfers(&mut self) -> bool {
+        let before = self.transfers.len();
+        self.transfers.retain(|transfer| {
+            transfer
+                .finished_at
+                .is_none_or(|finished| finished.elapsed() < Duration::from_secs(5))
+        });
+        self.transfers.len() != before
+    }
+
+    fn spawn_transfer_cleanup(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let alive = this.update(cx, |this, cx| {
+                    if this.prune_finished_transfers() {
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
     fn next_transfer_id(&mut self) -> u64 {
         let id = self.next_transfer_id;
         self.next_transfer_id += 1;
@@ -1465,6 +1513,7 @@ impl AppView {
             failed: false,
             error: None,
             started: Utc::now(),
+            finished_at: None,
         });
     }
 
@@ -1479,6 +1528,7 @@ impl AppView {
             failed: false,
             error: None,
             started: Utc::now(),
+            finished_at: None,
         });
     }
 
@@ -1538,6 +1588,7 @@ impl AppView {
                 this.update(cx, |this, cx| {
                     if let Some(t) = this.transfers.iter_mut().find(|t| t.id == id) {
                         t.done = true;
+                        t.finished_at = Some(Instant::now());
                         if let Err(e) = result {
                             t.failed = true;
                             t.error = Some(e);
@@ -1613,6 +1664,7 @@ impl AppView {
                 this.update(cx, |this, cx| {
                     if let Some(t) = this.transfers.iter_mut().find(|t| t.id == id) {
                         t.done = true;
+                        t.finished_at = Some(Instant::now());
                         if let Some(error) = &failure {
                             t.failed = true;
                             t.error = Some(error.clone());
@@ -1678,6 +1730,7 @@ impl AppView {
             this.update(cx, |this, cx| {
                 if let Some(t) = this.transfers.iter_mut().find(|t| t.id == id) {
                     t.done = true;
+                    t.finished_at = Some(Instant::now());
                     if let Err(e) = &result {
                         t.failed = true;
                         t.error = Some(e.clone());
@@ -2049,23 +2102,6 @@ impl AppView {
                             .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                     )
                     .child(
-                        Button::new("toggle-host-pane")
-                            .ghost()
-                            .small()
-                            .rounded(px(14.))
-                            .w(px(28.))
-                            .h(px(28.))
-                            .icon(Icon::new(IconName::Columns2).small())
-                            .tooltip(if self.show_host_pane {
-                                "Hide second pane"
-                            } else {
-                                "Show second pane"
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.toggle_host_pane(cx);
-                            })),
-                    )
-                    .child(
                         Button::new("backup")
                             .ghost()
                             .small()
@@ -2266,6 +2302,7 @@ impl AppView {
         self.selected.clear();
         self.selected.insert("/sdcard/Pictures".into());
         self.focused_side = Side::Device;
+        self.show_host_pane = false;
         self.bump_entries();
     }
 
@@ -2303,6 +2340,8 @@ impl AppView {
         self.selected_device = None;
         self.device_entries.clear();
         self.device_cwd = "/sdcard".into();
+        self.show_host_pane = true;
+        self.focused_side = Side::Host;
 
         self.host_cwd = std::path::PathBuf::from("/home/demo");
         self.host_entries = vec![FileEntry {

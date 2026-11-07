@@ -79,8 +79,11 @@ entities only where a controlled input or switch must re-render.
 `cx.new(|cx| AppView::new(window, cx))`. `AppView::render` is a column:
 
 ```
-title bar → main (sidebar + host pane + divider + device pane) → status bar
+title bar → main (sidebar + host pane or device pane) → status bar
 ```
+
+With no device, the host pane fills the main area. With a device attached,
+the device pane fills it by default; opening the host pane splits the two.
 
 All device and host I/O happens on the background executor (`cx.spawn` +
 `background_executor().spawn`); results are applied in an entity update. Never
@@ -121,7 +124,8 @@ failures land in `status_line`. Files on the device have no opener.
 
 Default is double-click to open. `Settings::open_on_single_click` switches both
 the list row and grid tile to open on one click; Ctrl/Cmd-click still only
-extends selection.
+extends selection. Right-clicking an unselected row or tile selects it before
+opening the context menu; right-clicking a selected one keeps the selection.
 
 ### Window chrome and theme
 
@@ -301,12 +305,13 @@ for frame in /tmp/androidfiles*.ppm; do ffmpeg -loglevel error -y -i "$frame" "$
 | `/tmp/androidfiles_split.ppm` | 1120×720 | grid, split panes |
 | `/tmp/androidfiles_split_list.ppm` | 1120×720 | list, split panes |
 | `/tmp/androidfiles_narrow_split_list.ppm` | 900×600 | list, split panes |
-| `/tmp/androidfiles_no_device.ppm` | 1100×700 | split panes, no phone attached |
+| `/tmp/androidfiles_no_device.ppm` | 1100×700 | PC pane full, no phone attached |
 | `/tmp/androidfiles_long_path.ppm` | 1100×700 | deep host path so the bar wraps |
 | `/tmp/androidfiles_settings.ppm` | 1120×720 | settings dialog |
 | `/tmp/androidfiles_properties.ppm` | 1120×720 | properties dialog, copyable values |
 | `/tmp/androidfiles_wireless.ppm` | 1120×720 | add wireless device dialog |
 | `/tmp/androidfiles_sidebar_devices.ppm` | 1120×720 | USB + wireless device rows, root shortcuts |
+| `/tmp/androidfiles_sidebar_transfers.ppm` | 1120×720 | sidebar scrolled through many transfers |
 | `/tmp/androidfiles_disconnected.ppm` | 1120×720 | device removed after a loaded folder |
 | `/tmp/androidfiles_pair_wireless.ppm` | 1120×720 | standalone pairing dialog |
 | `/tmp/androidfiles_scrollbar.ppm` | 1120×720 | split panes with overflowing lists |
@@ -347,10 +352,14 @@ Frame listeners and hitboxes belong to the **last drawn frame**, so draw before
 dispatching inside the same `update_window` call; an undrawn update in between
 drops them.
 
+Tests must not call `Settings::save`; it writes the real user config. Exercise
+pure settings helpers instead.
+
 Covered: title-bar drag vs. toolbar press, divider drag, empty-device listing,
-sidebar routing to the highlighted pane, settings dialog, properties dialog,
-backspace/delete editing the search field, ctrl-shift-n opening a dialog,
-and the pane scrollbars.
+sidebar routing to the highlighted pane, right-click selection, settings
+dialog, properties dialog, backspace/delete editing the search field,
+ctrl-shift-n opening a dialog, favorite reordering, transfer expiry, the pane
+scrollbars, and sidebar scrolling.
 
 ### What a correct frame looks like
 
@@ -361,7 +370,10 @@ and the pane scrollbars.
 - Sidebar shortcuts target the highlighted pane.
 - Device Locations end with exactly `/` and `/sdcard`; `/sdcard` maps to
   `/storage/emulated/0`. Device rows show the model (serial only as fallback).
-- **Add wireless device** is pinned to the bottom of the sidebar, centred.
+- **Add wireless device** sits at the bottom of the sidebar, centred.
+- Favorite rows can be dragged onto another favorite row to reorder them;
+  the order is saved immediately. Finished transfers disappear five seconds
+  after completing. The whole sidebar scrolls when its content overflows.
 - List panes narrower than `COMPACT_LIST_WIDTH` (480 px) show Name and Size
   only; wider panes add Date Modified and Permissions.
 - Each pane overlays a slim scrollbar at its right edge, visible only while
@@ -369,13 +381,12 @@ and the pane scrollbars.
 - Divider sits at `SIDEBAR_WIDTH + host_pane_width` with a 5 px grab band.
   Until dragged the split is equal and follows the window; afterwards the
   chosen width is clamped so the device pane keeps `MIN_DEVICE_PANE_WIDTH`.
-- "No device connected" is centred in the device pane while the host pane
-  still lists its folder. The device path bar, Internal storage, and Locations
-  disappear; Favorites stays for host shortcuts. Quick locations follow the
-  highlighted pane, falling back to the PC with no device. Device-only
-  favorites are hidden with no device or while the host pane is active.
-  Stale listings are cleared, including in-flight loads that finish after the
-  device goes away.
+- With no device, the PC pane fills the main area; the device path bar,
+  Internal storage, and Locations disappear. Favorites stays for host
+  shortcuts. Quick locations follow the highlighted pane, falling back to the
+  PC with no device. Device-only favorites are hidden with no device or while
+  the host pane is active. Stale listings are cleared, including in-flight
+  loads that finish after the device goes away.
 - Status summary is left, item count is the far-right trailing item.
 
 ### Live capture

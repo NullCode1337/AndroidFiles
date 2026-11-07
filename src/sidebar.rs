@@ -7,11 +7,12 @@ use chrono::Utc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use crate::app::AppView;
+use crate::app::{AppView, DragGhost};
 use crate::appearance;
 use crate::format::{device_label, format_size, format_speed};
 use crate::model::Side;
@@ -131,20 +132,27 @@ impl AppView {
             .when_some(locations, |el, locations| el.child(locations))
             .when(self.devices.is_empty(), move |el| {
                 let refresh = this.clone();
-                el.child(div().px(px(8.)).pt(px(6.)).child(nav_row(
-                    "refresh-devices",
-                    "Refresh devices",
-                    IconName::RefreshCw,
-                    NavRowColors {
-                        icon: muted,
-                        active,
-                        hover,
-                    },
-                    false,
-                    move |_, _, cx| {
-                        refresh.update(cx, |this, cx| this.refresh_devices(cx)).ok();
-                    },
-                )))
+                el.child(
+                    div()
+                        .w_full()
+                        .flex_none()
+                        .px(px(8.))
+                        .pt(px(6.))
+                        .child(nav_row(
+                            "refresh-devices",
+                            "Refresh devices",
+                            IconName::RefreshCw,
+                            NavRowColors {
+                                icon: muted,
+                                active,
+                                hover,
+                            },
+                            false,
+                            move |_, _, cx| {
+                                refresh.update(cx, |this, cx| this.refresh_devices(cx)).ok();
+                            },
+                        )),
+                )
             })
             .when(!self.transfers.is_empty(), move |el| {
                 el.child(section_header("Transfers", muted))
@@ -152,6 +160,8 @@ impl AppView {
             })
             .child(div().flex_1().min_h_0())
             .child(add_wireless_item)
+            .overflow_y_scrollbar()
+            .id("sidebar-scroll")
     }
 
     fn render_quick_locations(
@@ -163,12 +173,12 @@ impl AppView {
     ) -> impl IntoElement {
         let this = cx.weak_entity();
         let locations: Vec<(&'static str, &'static str, IconName)> = vec![
-            ("Downloads", "/sdcard/Download", IconName::ArrowDownToLine),
-            ("Pictures", "/sdcard/Pictures", IconName::Image),
-            ("Music", "/sdcard/Music", IconName::Music),
-            ("Movies", "/sdcard/Movies", IconName::Film),
-            ("Documents", "/sdcard/Documents", IconName::FileText),
             ("DCIM", "/sdcard/DCIM", IconName::Camera),
+            ("Documents", "/sdcard/Documents", IconName::FileText),
+            ("Downloads", "/sdcard/Download", IconName::ArrowDownToLine),
+            ("Movies", "/sdcard/Movies", IconName::Film),
+            ("Music", "/sdcard/Music", IconName::Music),
+            ("Pictures", "/sdcard/Pictures", IconName::Image),
         ];
 
         v_flex()
@@ -228,39 +238,61 @@ impl AppView {
             .px(px(8.))
             .gap(px(1.))
             .when(!self.settings.favorites.is_empty(), move |el| {
-                el.children(self.settings.favorites.iter().map(move |fav| {
-                    let this = this.clone();
-                    let serial = fav.device_serial.clone();
-                    let path = fav.path.clone();
-                    let name = fav.name.clone();
-                    let is_active = current.as_deref() == Some(serial.as_str())
-                        && self.focused_side == Side::Device
-                        && self.device_cwd == path;
-                    nav_row(
-                        format!("fav-{serial}-{path}"),
-                        name,
-                        IconName::Folder,
-                        NavRowColors {
-                            icon: icon_color,
-                            active,
-                            hover,
-                        },
-                        is_active,
-                        {
-                            let path = path.clone();
-                            let serial = serial.clone();
-                            move |_, _, cx| {
-                                this.update(cx, |this, cx| {
-                                    if this.selected_device.as_deref() != Some(serial.as_str()) {
-                                        this.select_device(serial.clone(), cx);
+                el.children(
+                    self.settings
+                        .favorites
+                        .iter()
+                        .enumerate()
+                        .map(move |(index, fav)| {
+                            let click = this.clone();
+                            let drop = this.clone();
+                            let serial = fav.device_serial.clone();
+                            let path = fav.path.clone();
+                            let name = fav.name.clone();
+                            let drag_name = name.clone();
+                            let is_active = current.as_deref() == Some(serial.as_str())
+                                && self.focused_side == Side::Device
+                                && self.device_cwd == path;
+                            nav_row(
+                                format!("fav-{serial}-{path}"),
+                                name,
+                                IconName::Folder,
+                                NavRowColors {
+                                    icon: icon_color,
+                                    active,
+                                    hover,
+                                },
+                                is_active,
+                                {
+                                    let path = path.clone();
+                                    let serial = serial.clone();
+                                    move |_, _, cx| {
+                                        click
+                                            .update(cx, |this, cx| {
+                                                if this.selected_device.as_deref()
+                                                    != Some(serial.as_str())
+                                                {
+                                                    this.select_device(serial.clone(), cx);
+                                                }
+                                                this.navigate_device(path.clone(), cx);
+                                            })
+                                            .ok();
                                     }
-                                    this.navigate_device(path.clone(), cx);
-                                })
-                                .ok();
-                            }
-                        },
-                    )
-                }))
+                                },
+                            )
+                            .on_drag(FavoriteDrag { index }, move |_, _, _, cx| {
+                                cx.new(|_cx| DragGhost::new(drag_name.clone()))
+                            })
+                            .on_drop::<FavoriteDrag>(
+                                move |payload, _, cx| {
+                                    drop.update(cx, |this, cx| {
+                                        this.reorder_favorite(payload.index, index, cx)
+                                    })
+                                    .ok();
+                                },
+                            )
+                        }),
+                )
             })
             .child(
                 div()
@@ -424,76 +456,79 @@ impl AppView {
         let danger = cx.theme().danger;
         let success = cx.theme().success;
 
-        v_flex().children(self.transfers.iter().map(move |t| {
-            let arrow = match t.direction {
-                crate::model::TransferDirection::Push => "↑",
-                crate::model::TransferDirection::Pull => "↓",
-            };
-            let pct = t.fraction() * 100.0;
-            let color = if t.failed {
-                danger
-            } else if t.done {
-                success
-            } else {
-                primary
-            };
-            let speed = (!t.done && t.bytes_done > 0).then(|| {
-                let secs = Utc::now()
-                    .signed_duration_since(t.started)
-                    .num_seconds()
-                    .max(1);
-                format_speed(t.bytes_done / secs as u64)
-            });
-            v_flex()
-                .id(ElementId::from(format!("transfer-{}", t.id)))
-                .w_full()
-                .px(px(16.))
-                .py(px(3.))
-                .gap(px(4.))
-                .child(
-                    h_flex()
-                        .w_full()
-                        .items_center()
-                        .gap(px(6.))
-                        .child(div().text_xs().text_color(muted).child(arrow))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .text_xs()
-                                .child(t.name.clone()),
-                        ),
-                )
-                .child(
-                    h_flex()
-                        .w_full()
-                        .items_center()
-                        .gap(px(6.))
-                        .child(
-                            div().flex_1().min_w_0().child(
-                                Progress::new(ElementId::from(format!(
-                                    "transfer-progress-{}",
-                                    t.id
-                                )))
-                                .value(pct)
-                                .color(color),
+        v_flex()
+            .w_full()
+            .flex_none()
+            .children(self.transfers.iter().map(move |t| {
+                let arrow = match t.direction {
+                    crate::model::TransferDirection::Push => "↑",
+                    crate::model::TransferDirection::Pull => "↓",
+                };
+                let pct = t.fraction() * 100.0;
+                let color = if t.failed {
+                    danger
+                } else if t.done {
+                    success
+                } else {
+                    primary
+                };
+                let speed = (!t.done && t.bytes_done > 0).then(|| {
+                    let secs = Utc::now()
+                        .signed_duration_since(t.started)
+                        .num_seconds()
+                        .max(1);
+                    format_speed(t.bytes_done / secs as u64)
+                });
+                v_flex()
+                    .id(ElementId::from(format!("transfer-{}", t.id)))
+                    .w_full()
+                    .px(px(16.))
+                    .py(px(3.))
+                    .gap(px(4.))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(div().text_xs().text_color(muted).child(arrow))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .text_xs()
+                                    .child(t.name.clone()),
                             ),
-                        )
-                        .child(div().text_xs().text_color(muted).child(format!(
-                            "{}/{}",
-                            format_size(t.bytes_done),
-                            format_size(t.bytes_total)
-                        ))),
-                )
-                .when_some(speed, |el, s| {
-                    el.child(div().text_xs().text_color(muted).child(s))
-                })
-                .when_some(t.error.clone(), move |el, e| {
-                    el.child(div().text_xs().text_color(danger).child(e))
-                })
-        }))
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div().flex_1().min_w_0().child(
+                                    Progress::new(ElementId::from(format!(
+                                        "transfer-progress-{}",
+                                        t.id
+                                    )))
+                                    .value(pct)
+                                    .color(color),
+                                ),
+                            )
+                            .child(div().text_xs().text_color(muted).child(format!(
+                                "{}/{}",
+                                format_size(t.bytes_done),
+                                format_size(t.bytes_total)
+                            ))),
+                    )
+                    .when_some(speed, |el, s| {
+                        el.child(div().text_xs().text_color(muted).child(s))
+                    })
+                    .when_some(t.error.clone(), move |el, e| {
+                        el.child(div().text_xs().text_color(danger).child(e))
+                    })
+            }))
     }
 
     fn add_current_to_favorites(&mut self, cx: &mut Context<Self>) {
@@ -521,6 +556,18 @@ impl AppView {
         }
         cx.notify();
     }
+
+    pub(crate) fn reorder_favorite(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        if crate::model::reorder_favorites(&mut self.settings.favorites, from, to) {
+            let _ = self.settings.save();
+            cx.notify();
+        }
+    }
+}
+
+#[derive(Clone)]
+struct FavoriteDrag {
+    index: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -538,7 +585,7 @@ fn nav_row(
     colors: NavRowColors,
     is_active: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+) -> impl StatefulInteractiveElement + IntoElement {
     h_flex()
         .id(id)
         .w_full()

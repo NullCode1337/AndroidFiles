@@ -1,5 +1,7 @@
 //! Domain types shared by the backend and the UI.
 
+use std::time::Instant;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -126,6 +128,7 @@ pub struct TransferProgress {
     pub failed: bool,
     pub error: Option<String>,
     pub started: DateTime<Utc>,
+    pub finished_at: Option<Instant>,
 }
 
 impl TransferProgress {
@@ -166,6 +169,16 @@ pub struct Favorite {
     pub device_serial: String,
     pub path: String,
     pub name: String,
+}
+
+pub fn reorder_favorites(favorites: &mut Vec<Favorite>, from: usize, to: usize) -> bool {
+    let len = favorites.len();
+    if from >= len || to >= len || from == to {
+        return false;
+    }
+    let favorite = favorites.remove(from);
+    favorites.insert(to, favorite);
+    true
 }
 
 /// A pending backup entry shown in the sidebar.

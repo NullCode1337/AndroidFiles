@@ -25,23 +25,34 @@ impl AppView {
             .min_h_0()
             .w_full()
             .child(self.render_sidebar(window, cx))
-            .when(self.show_host_pane, |el| {
+            .when(self.selected_device.is_none(), |el| {
                 el.child(
                     div()
+                        .flex_1()
+                        .min_w_0()
                         .h_full()
-                        .w(self.clamped_host_width(window.viewport_size().width))
-                        .flex_none()
                         .child(self.render_file_pane(Side::Host, window, cx)),
                 )
-                .child(self.render_pane_divider(cx))
             })
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .child(self.render_file_pane(Side::Device, window, cx)),
-            )
+            .when(self.selected_device.is_some(), |el| {
+                el.when(self.show_host_pane, |el| {
+                    el.child(
+                        div()
+                            .h_full()
+                            .w(self.clamped_host_width(window.viewport_size().width))
+                            .flex_none()
+                            .child(self.render_file_pane(Side::Host, window, cx)),
+                    )
+                    .child(self.render_pane_divider(cx))
+                })
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .child(self.render_file_pane(Side::Device, window, cx)),
+                )
+            })
     }
 
     /// A 5px grab band around a 1px line.
@@ -667,6 +678,14 @@ impl AppView {
                     .ok();
                 }
             })
+            .on_mouse_down(MouseButton::Right, {
+                let this = this.clone();
+                let path = path.clone();
+                move |_, _, cx| {
+                    this.update(cx, |this, cx| this.select_for_context_menu(&path, side, cx))
+                        .ok();
+                }
+            })
             .context_menu({
                 let this = this.clone();
                 let path = path.clone();
@@ -830,6 +849,14 @@ impl AppView {
                     .ok();
                 }
             })
+            .on_mouse_down(MouseButton::Right, {
+                let this = this.clone();
+                let path = path.clone();
+                move |_, _, cx| {
+                    this.update(cx, |this, cx| this.select_for_context_menu(&path, side, cx))
+                        .ok();
+                }
+            })
             .context_menu({
                 let this = this.clone();
                 let path = path.clone();
@@ -876,6 +903,20 @@ impl AppView {
             self.selected.insert(path.to_string());
         }
         cx.notify();
+    }
+
+    pub(crate) fn select_for_context_menu(
+        &mut self,
+        path: &str,
+        side: Side,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_selected(path) {
+            self.focused_side = side;
+            cx.notify();
+        } else {
+            self.select_entry(path, side, false, cx);
+        }
     }
 
     fn open_entry(&mut self, path: &str, side: Side, cx: &mut Context<Self>) {
