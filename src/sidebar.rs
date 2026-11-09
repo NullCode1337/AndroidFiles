@@ -490,49 +490,77 @@ impl AppView {
     ) -> impl IntoElement {
         let this = cx.weak_entity();
         let mut rows: Vec<AnyElement> = Vec::new();
-        // Without a device the section still offers the computer's filesystem
-        // root; with one it lists the device roots.
-        let on_device = self.selected_device.is_some();
-        let specs: &[(&str, &str, &str)] = if on_device {
-            &[
-                ("root", "/", "/"),
-                ("sdcard", "/sdcard", "/storage/emulated/0"),
-            ]
-        } else {
-            &[("host-root", "/", "/")]
+        let has_device = self.selected_device.is_some();
+        let device_focused = self.focused_side == Side::Device;
+        let host_focused = self.focused_side == Side::Host;
+        let colors = NavRowColors {
+            icon: muted,
+            active,
+            hover,
         };
 
-        for &(id, label, path) in specs {
-            let is_active = if on_device {
-                self.focused_side == Side::Device
-                    && (self.device_cwd == path
-                        || (path == "/storage/emulated/0" && self.device_cwd == "/sdcard"))
-            } else {
-                self.focused_side == Side::Host && self.host_cwd == Path::new(path)
-            };
-            let this = this.clone();
-            let target = path.to_string();
+        // `/` follows the highlighted pane: PC root or device root.
+        let root_active = (device_focused && self.device_cwd == "/")
+            || (host_focused && self.host_cwd == Path::new("/"));
+        rows.push(
+            nav_row(
+                "path-root",
+                "/",
+                IconName::HardDrive,
+                colors,
+                root_active,
+                {
+                    let this = this.clone();
+                    move |_, _, cx| {
+                        this.update(cx, |this, cx| this.open_root(cx)).ok();
+                    }
+                },
+            )
+            .into_any_element(),
+        );
+
+        if has_device {
             rows.push(
                 nav_row(
-                    format!("path-{id}"),
+                    "path-sdcard",
+                    "/sdcard",
+                    IconName::HardDrive,
+                    colors,
+                    device_focused
+                        && (self.device_cwd == "/sdcard"
+                            || self.device_cwd == "/storage/emulated/0"),
+                    {
+                        let this = this.clone();
+                        move |_, _, cx| {
+                            this.update(cx, |this, cx| this.navigate_device("/sdcard".into(), cx))
+                                .ok();
+                        }
+                    },
+                )
+                .into_any_element(),
+            );
+        }
+
+        // Mounted host partitions; clicking focuses and opens the PC pane.
+        for mount in self
+            .host_mounts
+            .iter()
+            .filter(|mount| mount.as_path() != Path::new("/"))
+        {
+            let label = mount.to_string_lossy().to_string();
+            let is_active = host_focused && self.host_cwd == *mount;
+            let target = mount.clone();
+            let this = this.clone();
+            rows.push(
+                nav_row(
+                    format!("path-mount-{label}"),
                     label,
                     IconName::HardDrive,
-                    NavRowColors {
-                        icon: muted,
-                        active,
-                        hover,
-                    },
+                    colors,
                     is_active,
                     move |_, _, cx| {
-                        if on_device {
-                            this.update(cx, |this, cx| this.navigate_device(target.clone(), cx))
-                                .ok();
-                        } else {
-                            this.update(cx, |this, cx| {
-                                this.navigate_host(PathBuf::from(target.clone()), cx)
-                            })
+                        this.update(cx, |this, cx| this.open_host_path(target.clone(), cx))
                             .ok();
-                        }
                     },
                 )
                 .into_any_element(),

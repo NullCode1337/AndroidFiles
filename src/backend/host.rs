@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use chrono::{DateTime, Utc};
@@ -71,6 +71,43 @@ pub fn list_directory(path: &Path) -> anyhow::Result<Vec<FileEntry>> {
 
 pub fn is_directory(path: &Path) -> bool {
     fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false)
+}
+
+/// Mount points worth showing in the sidebar, root first. `sysinfo` already
+/// skips pseudo filesystems and network shares; empty and snap mounts are
+/// dropped, and bind mounts of one device collapse to the shortest path.
+pub fn mount_points() -> Vec<PathBuf> {
+    let Ok(disks) = sysinfo::Disks::new_with_refreshed_list() else {
+        return Vec::new();
+    };
+    let mut entries: Vec<(String, PathBuf)> = disks
+        .iter()
+        .filter_map(|disk| {
+            let mount = disk.mount_point().to_path_buf();
+            if !mount.is_dir() || mount.starts_with("/snap") {
+                return None;
+            }
+            let name = disk.name().to_string_lossy().to_string();
+            Some((name, mount))
+        })
+        .collect();
+    entries.sort_by(|a, b| a.1.cmp(&b.1));
+
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<PathBuf> = entries
+        .into_iter()
+        .filter(|(name, mount)| {
+            let key = if cfg!(unix) && !name.is_empty() {
+                name.clone()
+            } else {
+                mount.to_string_lossy().to_string()
+            };
+            seen.insert(key)
+        })
+        .map(|(_, mount)| mount)
+        .collect();
+    out.sort_by_key(|path| path != Path::new("/"));
+    out
 }
 
 pub fn file_size(path: &Path) -> u64 {

@@ -996,6 +996,67 @@ fn blank_space_click_clears_selection() {
     });
 }
 
+#[cfg(unix)]
+#[test]
+fn host_mount_points_include_root() {
+    let mounts = crate::backend::host::mount_points();
+    assert!(mounts.iter().any(|path| path == std::path::Path::new("/")));
+}
+
+#[test]
+fn root_shortcut_follows_the_focused_pane() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (_handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.path-root".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, cx| {
+        view.load_demo_snapshot_state();
+
+        view.focused_side = Side::Host;
+        view.host_cwd = std::path::PathBuf::from("/home/demo");
+        view.open_root(cx);
+        assert_eq!(view.host_cwd, std::path::PathBuf::from("/"));
+        assert_eq!(view.focused_side, Side::Host);
+
+        view.device_cwd = "/".into();
+        view.focused_side = Side::Device;
+        view.open_root(cx);
+        assert_eq!(view.device_cwd, "/");
+        assert_eq!(view.focused_side, Side::Device);
+
+        // A host mount focuses the PC pane and opens it when hidden.
+        view.host_only = false;
+        view.show_host_pane = false;
+        view.focused_side = Side::Device;
+        view.open_host_path(std::path::PathBuf::from("/android"), cx);
+        assert!(view.show_host_pane);
+        assert_eq!(view.focused_side, Side::Host);
+        assert_eq!(view.host_cwd, std::path::PathBuf::from("/android"));
+    });
+}
+
 #[test]
 fn this_computer_expands_the_pc_pane_over_a_device() {
     let mut cx = HeadlessAppContext::with_platform(

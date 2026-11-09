@@ -132,6 +132,8 @@ pub struct AppView {
     pub(crate) selected_device: Option<String>,
 
     pub(crate) host_cwd: PathBuf,
+    /// Mounted host partitions shown under Paths.
+    pub(crate) host_mounts: Vec<PathBuf>,
     host_entries: Vec<FileEntry>,
     pub(crate) host_loading: bool,
 
@@ -202,6 +204,7 @@ impl AppView {
             .clone()
             .or_else(|| resolve_adb_binary(None));
         let host_cwd = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        let host_mounts = host::mount_points();
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
 
         let mut this = Self {
@@ -210,6 +213,7 @@ impl AppView {
             devices: Vec::new(),
             selected_device: None,
             host_cwd,
+            host_mounts,
             host_entries: Vec::new(),
             host_loading: false,
             device_cwd: "/sdcard".to_string(),
@@ -299,6 +303,7 @@ impl AppView {
 
         this.spawn_poller(cx);
         this.spawn_transfer_cleanup(cx);
+        this.spawn_mount_refresh(cx);
         this.load_host_dir(cx);
         window.focus(&this.focus_handle, cx);
         this
@@ -923,6 +928,27 @@ impl AppView {
         self.set_host_dir(path, cx);
     }
 
+    /// Focuses the PC pane and navigates it, showing the pane if a device had
+    /// hidden it.
+    pub(crate) fn open_host_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.selected_device.is_none() {
+            self.show_host_pane = true;
+            self.host_only = true;
+        } else if !self.host_only {
+            self.show_host_pane = true;
+        }
+        self.navigate_host(path, cx);
+    }
+
+    /// The `/` shortcut: move whichever pane is highlighted to its own root.
+    pub(crate) fn open_root(&mut self, cx: &mut Context<Self>) {
+        if self.selected_device.is_some() && self.focused_side == Side::Device {
+            self.navigate_device("/".into(), cx);
+        } else {
+            self.open_host_path(PathBuf::from("/"), cx);
+        }
+    }
+
     pub(crate) fn navigate_device(&mut self, path: String, cx: &mut Context<Self>) {
         self.focused_side = Side::Device;
         self.show_host_pane = false;
@@ -1515,6 +1541,29 @@ impl AppView {
                 if alive.is_err() {
                     break;
                 }
+            }
+        })
+        .detach();
+    }
+
+    /// Mounts change when removable media is plugged in; poll them off-thread.
+    fn spawn_mount_refresh(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                let mounts = cx
+                    .background_executor()
+                    .spawn(async { host::mount_points() })
+                    .await;
+                let alive = this.update(cx, |this, cx| {
+                    if this.host_mounts != mounts {
+                        this.host_mounts = mounts;
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+                cx.background_executor().timer(Duration::from_secs(5)).await;
             }
         })
         .detach();

@@ -38,6 +38,7 @@ Dependencies are pinned exactly:
   `gpui-component`), `gpui_kit::base` (behavior, `gpui-base`), `gpui_kit::assets`,
   `gpui_kit::platform`.
 - `adb_client = "=2.1.19"`.
+- `sysinfo = "=0.40.1"` — mounted PC partitions for the sidebar Paths section.
 
 Never invent a gpui API. Check the actual signature in
 `~/.cargo/registry/src/*/gpui-kit-0.9.0/`, `gpui-component-0.9.0/`,
@@ -401,11 +402,12 @@ confirmation, and the empty-paste toast.
 - **Devices** lists every attached device and highlights the selected one.
   Clicking a device selects it and opens its internal storage. The only device
   is selected automatically.
-- **Paths** contains exactly `/` and `/sdcard` (`/storage/emulated/0`) for the
-  selected device. Without a device it shows a single `/` that opens the
-  computer's filesystem root. Device rows show the model (serial only as
-  fallback) and a trash button that asks before disconnecting the transport.
-  Favorites are filtered to the selected device.
+- **Paths** starts with `/`, which moves whichever pane is highlighted to its
+  own root. A selected device adds `/sdcard` (`/storage/emulated/0`); mounted
+  PC partitions follow (`sysinfo::Disks`), and clicking one focuses the PC
+  pane, opening it when a device had hidden it. Device rows show the model
+  (serial only as fallback) and a trash button that asks before disconnecting
+  the transport. Favorites are filtered to the selected device.
 - **Add wireless device** sits at the bottom of the sidebar, centred.
 - Favorite rows can be dragged onto another favorite row to reorder them;
   the order is saved immediately. Finished transfers disappear five seconds
@@ -422,8 +424,8 @@ confirmation, and the empty-paste toast.
 - With no device, the PC pane fills the main area; the device path bar,
   Internal storage, and Devices disappear. Favorites stays for host shortcuts,
   quick locations target the PC, and device-only favorites are hidden; Paths
-  keeps a single `/` row for the computer's filesystem root. Stale listings are
-  cleared, including in-flight loads that finish after the device goes away.
+  shows `/` and the mounted PC partitions. Stale listings are cleared,
+  including in-flight loads that finish after the device goes away.
 - With a device attached, **This computer** expands the PC pane to the same
   full width while the device pane is hidden; the device rows stay in the
   sidebar so a click can bring the device back.
