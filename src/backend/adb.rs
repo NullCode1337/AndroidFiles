@@ -275,10 +275,11 @@ impl AdbContext {
         }
     }
 
-    pub fn disconnect_wireless_serial(&self, serial: &str) -> Result<(), String> {
+    /// Disconnects any transport by serial. TCP serials go through the typed
+    /// server API; USB and mDNS serials go through the CLI, where the server
+    /// finds the transport by name.
+    pub fn disconnect_serial(&self, serial: &str) -> Result<(), String> {
         if !serial.contains(':') {
-            // adb_client's disconnect takes a SocketAddrV4, but the CLI
-            // accepts mDNS serials such as "..._adb-tls-connect._tcp".
             return self.disconnect_with_cli(serial);
         }
 

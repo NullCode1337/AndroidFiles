@@ -198,13 +198,121 @@ fn pull_error_opens_a_dialog() {
         .expect("open headless window");
 
     cx.update_window(handle, |_, window, cx| {
-        crate::dialogs::open_pull_error_dialog(window, cx, "photo.jpg", "Permission denied");
+        crate::dialogs::open_pull_errors_dialog(
+            window,
+            cx,
+            &[("photo.jpg".to_string(), "Permission denied".to_string())],
+        );
         assert!(
             window.has_active_dialog(cx),
             "a failed pull opens an error dialog"
         );
     })
     .expect("open pull error dialog");
+}
+
+#[test]
+fn queued_pull_errors_open_on_the_next_frame() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.pull-error-queued".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, _| {
+        view.pending_pull_errors
+            .push(("photo.jpg".into(), "Permission denied".into()));
+        view.pending_pull_errors
+            .push(("video.mp4".into(), "No such file".into()));
+    });
+
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    })
+    .expect("draw queued failure");
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+        assert!(
+            window.has_active_dialog(cx),
+            "queued failures surface as one dialog after the frame"
+        );
+    })
+    .expect("draw deferred dialog");
+    view.update(&mut cx, |view, _| {
+        assert!(
+            view.pending_pull_errors.is_empty(),
+            "the queue is drained once"
+        );
+    });
+}
+
+#[test]
+fn usb_device_has_a_disconnect_confirmation() {
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        Arc::new(gpui_kit::assets::AllAssets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(1120.), px(720.)),
+                    })),
+                    focus: true,
+                    show: false,
+                    window_decorations: Some(gpui_kit::WindowDecorations::Client),
+                    app_id: Some("com.androidfiles.usb-disconnect".to_string()),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| AppView::new(window, cx)),
+            )
+        })
+        .expect("open headless window");
+    view.update(&mut cx, |view, _| view.load_demo_snapshot_state());
+
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            view.confirm_disconnect_device(
+                "R5CT1234567".to_string(),
+                "Pixel 8".to_string(),
+                window,
+                cx,
+            );
+        });
+        assert!(
+            window.has_active_dialog(cx),
+            "USB devices get a confirmation too"
+        );
+    })
+    .expect("open USB disconnect confirmation");
 }
 
 #[test]

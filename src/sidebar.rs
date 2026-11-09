@@ -1,6 +1,6 @@
 //! The sidebar: shortcuts, favorites, devices, and active transfers.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 
@@ -62,14 +62,6 @@ impl AppView {
                 .flex_none()
                 .child(section_header("Devices", muted))
                 .child(self.render_devices(cx, muted, active, hover))
-                .into_any_element()
-        });
-        let paths = self.selected_device.is_some().then(|| {
-            v_flex()
-                .w_full()
-                .flex_none()
-                .child(section_header("Paths", muted))
-                .child(self.render_paths(cx, muted, active, hover))
                 .into_any_element()
         });
 
@@ -172,7 +164,8 @@ impl AppView {
             .child(self.render_quick_locations(cx, icon_color, active, hover))
             .child(self.render_favorites(cx, icon_color, active, hover))
             .when_some(devices, |el, devices| el.child(devices))
-            .when_some(paths, |el, paths| el.child(paths))
+            .child(section_header("Paths", muted))
+            .child(self.render_paths(cx, muted, active, hover))
             .when(self.devices.is_empty(), move |el| {
                 let refresh = this.clone();
                 el.child(
@@ -396,7 +389,10 @@ impl AppView {
             let serial = device.serial.clone();
             let label = device_label(&device.model, &device.serial);
             let is_selected = self.selected_device.as_deref() == Some(serial.as_str());
-            let wireless = device.wireless_serial.clone();
+            let disconnect_id = device
+                .wireless_serial
+                .clone()
+                .unwrap_or_else(|| serial.clone());
             let disconnect_name = if device.model.is_empty() {
                 serial.clone()
             } else {
@@ -451,30 +447,28 @@ impl AppView {
                                     .child(label),
                             ),
                     )
-                    .when_some(wireless, move |el, address| {
-                        el.child(
-                            Button::new(format!("disconnect-{serial}"))
-                                .ghost()
-                                .small()
-                                .rounded(px(6.))
-                                .w(px(22.))
-                                .h(px(22.))
-                                .icon(Icon::new(IconName::Trash).size(px(13.)))
-                                .tooltip("Disconnect")
-                                .on_click(move |_, window, cx| {
-                                    disconnect
-                                        .update(cx, |this, cx| {
-                                            this.confirm_disconnect_device(
-                                                address.clone(),
-                                                disconnect_name.clone(),
-                                                window,
-                                                cx,
-                                            )
-                                        })
-                                        .ok();
-                                }),
-                        )
-                    })
+                    .child(
+                        Button::new(format!("disconnect-{serial}"))
+                            .ghost()
+                            .small()
+                            .rounded(px(6.))
+                            .w(px(22.))
+                            .h(px(22.))
+                            .icon(Icon::new(IconName::Trash).size(px(13.)))
+                            .tooltip("Disconnect")
+                            .on_click(move |_, window, cx| {
+                                disconnect
+                                    .update(cx, |this, cx| {
+                                        this.confirm_disconnect_device(
+                                            disconnect_id.clone(),
+                                            disconnect_name.clone(),
+                                            window,
+                                            cx,
+                                        )
+                                    })
+                                    .ok();
+                            }),
+                    )
                     .into_any_element(),
             );
         }
@@ -496,19 +490,31 @@ impl AppView {
     ) -> impl IntoElement {
         let this = cx.weak_entity();
         let mut rows: Vec<AnyElement> = Vec::new();
+        // Without a device the section still offers the computer's filesystem
+        // root; with one it lists the device roots.
+        let on_device = self.selected_device.is_some();
+        let specs: &[(&str, &str, &str)] = if on_device {
+            &[
+                ("root", "/", "/"),
+                ("sdcard", "/sdcard", "/storage/emulated/0"),
+            ]
+        } else {
+            &[("host-root", "/", "/")]
+        };
 
-        for (id, label, path) in [
-            ("root", "/", "/"),
-            ("sdcard", "/sdcard", "/storage/emulated/0"),
-        ] {
-            let is_active = self.focused_side == Side::Device
-                && (self.device_cwd == path
-                    || (path == "/storage/emulated/0" && self.device_cwd == "/sdcard"));
+        for &(id, label, path) in specs {
+            let is_active = if on_device {
+                self.focused_side == Side::Device
+                    && (self.device_cwd == path
+                        || (path == "/storage/emulated/0" && self.device_cwd == "/sdcard"))
+            } else {
+                self.focused_side == Side::Host && self.host_cwd == Path::new(path)
+            };
             let this = this.clone();
             let target = path.to_string();
             rows.push(
                 nav_row(
-                    format!("root-{id}"),
+                    format!("path-{id}"),
                     label,
                     IconName::HardDrive,
                     NavRowColors {
@@ -518,8 +524,15 @@ impl AppView {
                     },
                     is_active,
                     move |_, _, cx| {
-                        this.update(cx, |this, cx| this.navigate_device(target.clone(), cx))
+                        if on_device {
+                            this.update(cx, |this, cx| this.navigate_device(target.clone(), cx))
+                                .ok();
+                        } else {
+                            this.update(cx, |this, cx| {
+                                this.navigate_host(PathBuf::from(target.clone()), cx)
+                            })
                             .ok();
+                        }
                     },
                 )
                 .into_any_element(),

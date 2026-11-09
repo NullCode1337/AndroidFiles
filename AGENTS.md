@@ -243,10 +243,11 @@ connections are saved in `wireless_devices`. Device listing collapses TCP
 transports sharing a host and, when `ro.serialno` matches, the USB and
 wireless transports for one phone, preferring a ready USB link. A row keeps
 the hidden wireless serial so its disconnect action works even when the USB
-transport is the one shown; `disconnect_wireless_serial` uses `host:disconnect`
-for `IP:port` serials and leaves the address paired. mDNS serials
-(`adb-…_adb-tls-connect._tcp`) cannot go through adb_client's
-`SocketAddrV4` API, so they are disconnected with `adb disconnect <serial>`.
+transport is the one shown; `disconnect_serial` uses `host:disconnect` for
+`IP:port` serials and leaves the address paired. USB and mDNS serials
+(`adb-…_adb-tls-connect._tcp`) cannot go through adb_client's `SocketAddrV4`
+API, so they are disconnected with `adb disconnect <serial>`, which finds any
+transport by serial.
 
 ### Shell commands
 
@@ -283,9 +284,10 @@ Cancel is an `AtomicBool`. Push does not follow directory symlinks (loops).
 Symlinks are skipped in tree scans, matching prior behavior.
 
 `pull_file`/`push_file` are the single-entry entry points used by the app and
-by `backup.rs`. A failed pull keeps its transfer row in the failed state and
-also opens an alert dialog with the error; permission-denied gets its own
-title.
+by `backup.rs`. A failed pull keeps its transfer row in the failed state; the
+app queues the failure and opens one alert on a later frame (several failures
+are coalesced), so a slow or failed adb call never opens a dialog mid-task.
+Permission-denied gets its own title.
 
 `guard_delete` refuses mount roots, shared-storage roots, and a fixed list of
 system directories. Extend that list rather than relying on `rm -rf` failures.
@@ -385,7 +387,8 @@ sidebar routing to the selected device, right-click selection, settings dialog,
 properties dialog, backspace/delete editing the search field, ctrl-shift-n
 opening a dialog, multi-item clipboard, blank-space selection clearing,
 favorite reordering, transfer expiry, the pane scrollbars, sidebar scrolling,
-PC-only expansion over a device, and the empty-paste toast.
+PC-only expansion over a device, queued pull errors, USB disconnect
+confirmation, and the empty-paste toast.
 
 ### What a correct frame looks like
 
@@ -399,7 +402,9 @@ PC-only expansion over a device, and the empty-paste toast.
   Clicking a device selects it and opens its internal storage. The only device
   is selected automatically.
 - **Paths** contains exactly `/` and `/sdcard` (`/storage/emulated/0`) for the
-  selected device. Device rows show the model (serial only as fallback).
+  selected device. Without a device it shows a single `/` that opens the
+  computer's filesystem root. Device rows show the model (serial only as
+  fallback) and a trash button that asks before disconnecting the transport.
   Favorites are filtered to the selected device.
 - **Add wireless device** sits at the bottom of the sidebar, centred.
 - Favorite rows can be dragged onto another favorite row to reorder them;
@@ -415,10 +420,10 @@ PC-only expansion over a device, and the empty-paste toast.
   Until dragged the split is equal and follows the window; afterwards the
   chosen width is clamped so the device pane keeps `MIN_DEVICE_PANE_WIDTH`.
 - With no device, the PC pane fills the main area; the device path bar,
-  Internal storage, Devices, and Paths disappear. Favorites stays for host
-  shortcuts, quick locations target the PC, and device-only favorites are
-  hidden. Stale listings are cleared, including in-flight loads that finish
-  after the device goes away.
+  Internal storage, and Devices disappear. Favorites stays for host shortcuts,
+  quick locations target the PC, and device-only favorites are hidden; Paths
+  keeps a single `/` row for the computer's filesystem root. Stale listings are
+  cleared, including in-flight loads that finish after the device goes away.
 - With a device attached, **This computer** expands the PC pane to the same
   full width while the device pane is hidden; the device rows stay in the
   sidebar so a click can bring the device back.

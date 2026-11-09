@@ -591,18 +591,31 @@ impl Render for PairWirelessView {
     }
 }
 
-pub fn open_pull_error_dialog(window: &mut Window, cx: &mut App, name: &str, error: &str) {
-    let name = name.to_string();
-    let error = error.to_string();
-    window.open_alert_dialog(cx, move |alert, _, _| {
-        let title = if error.to_lowercase().contains("permission denied") {
-            format!("Permission denied for \"{name}\"")
+/// Reports one or more failed pulls in a single alert, coalescing multi-select.
+pub fn open_pull_errors_dialog(window: &mut Window, cx: &mut App, failures: &[(String, String)]) {
+    let Some((first_name, first_error)) = failures.first() else {
+        return;
+    };
+    let (title, description) = if failures.len() == 1 {
+        let title = if first_error.to_lowercase().contains("permission denied") {
+            format!("Permission denied for \"{first_name}\"")
         } else {
-            format!("Couldn't pull \"{name}\"")
+            format!("Couldn't pull \"{first_name}\"")
         };
+        (title, first_error.clone())
+    } else {
+        let detail = failures
+            .iter()
+            .take(8)
+            .map(|(name, error)| format!("{name}: {error}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        (format!("Couldn't pull {} items", failures.len()), detail)
+    };
+    window.open_alert_dialog(cx, move |alert, _, _| {
         alert
-            .title(title)
-            .description(error.clone())
+            .title(title.clone())
+            .description(description.clone())
             .ok_text("OK")
             .centered()
             .entrance(DialogEntrance::FadeSlide)

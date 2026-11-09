@@ -174,8 +174,8 @@ pub struct AppView {
 
     /// Keeps the view on the key-dispatch path when no child is focused.
     focus_handle: FocusHandle,
-    /// Used by async failures that need to open a dialog.
-    window_handle: AnyWindowHandle,
+    /// Failed pulls reported on the next frame so the dialog never opens mid-task.
+    pub(crate) pending_pull_errors: Vec<(String, String)>,
     /// Live toolbar search; filters entries by name.
     pub(crate) search_input: Entity<InputState>,
     pub(crate) search: String,
@@ -203,7 +203,6 @@ impl AppView {
             .or_else(|| resolve_adb_binary(None));
         let host_cwd = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
-        let window_handle = window.window_handle();
 
         let mut this = Self {
             settings,
@@ -236,7 +235,7 @@ impl AppView {
             host_scroll: VirtualListScrollHandle::new(),
             device_scroll: VirtualListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
-            window_handle,
+            pending_pull_errors: Vec::new(),
             search_input,
             search: String::new(),
             _search_sub: None,
@@ -682,18 +681,16 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !is_wireless_serial(&address) {
-            self.status_line = Some("No wireless connection to disconnect.".to_string());
-            cx.notify();
-            return;
-        }
+        let description = if is_wireless_serial(&address) {
+            "This removes the wireless ADB connection. The device stays paired and can be reconnected from Add wireless device."
+        } else {
+            "This disconnects the USB debugging transport. If the device is still plugged in it may reconnect automatically."
+        };
         let this = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
             alert
                 .title(format!("Disconnect \"{name}\"?"))
-                .description(
-                    "This removes the wireless ADB connection. The device stays paired and can be reconnected from Add wireless device.",
-                )
+                .description(description)
                 .confirm()
                 .ok_text("Disconnect")
                 .ok_variant(ButtonVariant::Danger)
@@ -704,10 +701,8 @@ impl AppView {
                     let this = this.clone();
                     let address = address.clone();
                     move |_, _, cx| {
-                        this.update(cx, |this, cx| {
-                            this.disconnect_device(address.clone(), cx)
-                        })
-                        .ok();
+                        this.update(cx, |this, cx| this.disconnect_device(address.clone(), cx))
+                            .ok();
                         true
                     }
                 })
@@ -724,7 +719,7 @@ impl AppView {
                 .background_executor()
                 .spawn(async move {
                     let adb = AdbContext::new(adb_path);
-                    adb.disconnect_wireless_serial(&serial)?;
+                    adb.disconnect_serial(&serial)?;
                     adb.list_device_infos()
                 })
                 .await;
@@ -1646,7 +1641,6 @@ impl AppView {
             return;
         };
         let adb_path = self.adb_path.clone();
-        let window_handle = self.window_handle;
         for remote in remote_paths {
             let name = remote
                 .rsplit('/')
@@ -1700,15 +1694,12 @@ impl AppView {
                         }
                         cx.notify();
                     }
+                    if let Some(error) = failure {
+                        this.pending_pull_errors.push((dialog_name, error));
+                    }
                     this.load_host_dir(cx);
                 })
                 .ok();
-                if let Some(error) = failure {
-                    cx.update_window(window_handle, move |_, window, cx| {
-                        crate::dialogs::open_pull_error_dialog(window, cx, &dialog_name, &error);
-                    })
-                    .ok();
-                }
             })
             .detach();
         }
@@ -2410,6 +2401,13 @@ impl AppView {
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Queue failures from async transfers; defer so no dialog opens mid-task.
+        if !self.pending_pull_errors.is_empty() {
+            let failures = std::mem::take(&mut self.pending_pull_errors);
+            cx.defer_in(window, move |_, window, cx| {
+                crate::dialogs::open_pull_errors_dialog(window, cx, &failures);
+            });
+        }
         div()
             .id("root")
             .key_context(KEY_CONTEXT)
