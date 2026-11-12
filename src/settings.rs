@@ -15,6 +15,14 @@ pub enum ThemePref {
     Dark,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ViewMode {
+    List,
+    #[default]
+    Grid,
+}
+
 /// Where the window controls are drawn; `Auto` follows the platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -30,6 +38,9 @@ pub enum WindowControlsPref {
 pub struct Settings {
     pub version: u32,
     pub theme: ThemePref,
+    pub view_mode: ViewMode,
+    pub show_host_pane: bool,
+    pub host_only: bool,
     pub window_controls: WindowControlsPref,
     pub translucent_window: bool,
     pub adb_path: Option<String>,
@@ -53,6 +64,9 @@ impl Default for Settings {
         Self {
             version: 2,
             theme: ThemePref::System,
+            view_mode: ViewMode::Grid,
+            show_host_pane: false,
+            host_only: false,
             window_controls: WindowControlsPref::Auto,
             translucent_window: true,
             adb_path: None,

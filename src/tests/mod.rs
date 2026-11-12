@@ -888,6 +888,32 @@ fn titlebar_buttons_do_not_start_a_drag() {
 
 /// The empty device pane must not blank the host listing.
 #[test]
+fn view_mode_round_trips_in_settings() {
+    use crate::settings::{Settings, ViewMode};
+
+    let defaults = Settings::default();
+    assert_eq!(defaults.view_mode, ViewMode::Grid);
+    assert!(!defaults.show_host_pane);
+    assert!(!defaults.host_only);
+
+    let settings = Settings {
+        view_mode: ViewMode::List,
+        show_host_pane: true,
+        ..Default::default()
+    };
+    let text = serde_json::to_string(&settings).expect("serialize settings");
+    let loaded: Settings = serde_json::from_str(&text).expect("load settings");
+    assert_eq!(loaded.view_mode, ViewMode::List);
+    assert!(loaded.show_host_pane);
+
+    // Older files without the fields keep the defaults.
+    let legacy: Settings = serde_json::from_str("{\"version\":2}").expect("legacy settings");
+    assert_eq!(legacy.view_mode, ViewMode::Grid);
+    assert!(!legacy.show_host_pane);
+    assert!(!legacy.host_only);
+}
+
+#[test]
 fn favorites_can_be_reordered() {
     use crate::model::{Favorite, reorder_favorites};
 

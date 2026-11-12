@@ -30,7 +30,8 @@ impl AppView {
         let hover = cx.theme().list_hover;
         let this = cx.weak_entity();
 
-        let host_active = self.show_host_pane && self.focused_side == Side::Host;
+        let host_active = (self.selected_device.is_none() || self.show_host_pane)
+            && self.focused_side == Side::Host;
         let add_wireless = cx.weak_entity();
         let add_wireless_item = div().w_full().flex_none().px(px(8.)).pb(px(8.)).child(
             h_flex()

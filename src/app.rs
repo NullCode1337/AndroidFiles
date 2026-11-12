@@ -33,16 +33,10 @@ use crate::model::{
     BackupEntry, ClipboardEntry, ClipboardItem, ClipboardOp, ClipboardSource, DeviceInfo,
     FileEntry, Side, TransferDirection, TransferProgress,
 };
+pub(crate) use crate::settings::ViewMode;
 use crate::settings::{Settings, ThemePref, WindowControlsPref};
 
 const KEY_CONTEXT: &str = "AndroidFiles";
-
-/// How file entries are laid out in a pane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ViewMode {
-    List,
-    Grid,
-}
 
 /// Shared so a large drag is not deep-copied once per selected row.
 #[derive(Clone)]
@@ -205,6 +199,9 @@ impl AppView {
             .or_else(|| resolve_adb_binary(None));
         let host_cwd = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         let host_mounts = host::mount_points();
+        let view_mode = settings.view_mode;
+        let show_host_pane = settings.show_host_pane;
+        let host_only = settings.host_only;
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
 
         let mut this = Self {
@@ -225,9 +222,9 @@ impl AppView {
             transfers: Vec::new(),
             next_transfer_id: 0,
             backup_entries: Vec::new(),
-            view_mode: ViewMode::Grid,
-            show_host_pane: true,
-            host_only: true,
+            view_mode,
+            show_host_pane,
+            host_only,
             host_pane_width: px(0.),
             host_pane_custom: false,
             pane_drag: None,
@@ -324,6 +321,32 @@ impl AppView {
         cx.notify();
     }
 
+    pub(crate) fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
+        if self.view_mode == mode {
+            return;
+        }
+        self.view_mode = mode;
+        self.settings.view_mode = mode;
+        self.save_settings();
+        cx.notify();
+    }
+
+\    fn save_settings(&self) {
+        #[cfg(not(test))]
+        let _ = self.settings.save();
+    }
+
+    fn remember_layout(&mut self) {
+        if self.settings.show_host_pane == self.show_host_pane
+            && self.settings.host_only == self.host_only
+        {
+            return;
+        }
+        self.settings.show_host_pane = self.show_host_pane;
+        self.settings.host_only = self.host_only;
+        self.save_settings();
+    }
+
     /// Toggles the split view when a device is attached.
     pub(crate) fn toggle_host_pane(&mut self, cx: &mut Context<Self>) {
         if self.selected_device.is_none() {
@@ -340,6 +363,7 @@ impl AppView {
         } else {
             Side::Device
         };
+        self.remember_layout();
         cx.notify();
     }
 
@@ -361,6 +385,7 @@ impl AppView {
             self.show_host_pane = true;
             self.focused_side = Side::Host;
         }
+        self.remember_layout();
         cx.notify();
     }
 
@@ -519,9 +544,13 @@ impl AppView {
                         self.host_only = true;
                         self.focused_side = Side::Host;
                     } else if !had_device {
-                        self.show_host_pane = false;
-                        self.host_only = false;
-                        self.focused_side = Side::Device;
+                        self.show_host_pane = self.settings.show_host_pane;
+                        self.host_only = self.settings.host_only;
+                        self.focused_side = if self.show_host_pane || self.host_only {
+                            Side::Host
+                        } else {
+                            Side::Device
+                        };
                     }
                     changed = true;
                 }
@@ -784,6 +813,7 @@ impl AppView {
         self.show_host_pane = false;
         self.host_only = false;
         self.selected.clear();
+        self.remember_layout();
         self.load_device_dir(cx);
         cx.notify();
     }
@@ -937,6 +967,9 @@ impl AppView {
         } else if !self.host_only {
             self.show_host_pane = true;
         }
+        if self.selected_device.is_some() {
+            self.remember_layout();
+        }
         self.navigate_host(path, cx);
     }
 
@@ -953,6 +986,7 @@ impl AppView {
         self.focused_side = Side::Device;
         self.show_host_pane = false;
         self.host_only = false;
+        self.remember_layout();
         if path == self.device_cwd {
             cx.notify();
             return;
@@ -2124,8 +2158,7 @@ impl AppView {
                                 button.bg(background)
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.view_mode = ViewMode::Grid;
-                                cx.notify();
+                                this.set_view_mode(ViewMode::Grid, cx);
                             })),
                     )
                     .child(
@@ -2147,8 +2180,7 @@ impl AppView {
                                 button.bg(background)
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.view_mode = ViewMode::List;
-                                cx.notify();
+                                this.set_view_mode(ViewMode::List, cx);
                             })),
                     ),
             )
@@ -2371,6 +2403,8 @@ impl AppView {
         self.focused_side = Side::Device;
         self.show_host_pane = false;
         self.host_only = false;
+        self.settings.show_host_pane = false;
+        self.settings.host_only = false;
         self.bump_entries();
     }
 

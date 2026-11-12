@@ -84,10 +84,10 @@ title bar → main (sidebar + host pane or device pane) → status bar
 ```
 
 With no device, the host pane fills the main area. With a device attached,
-the device pane fills it by default; opening the host pane splits the two.
-Clicking **This computer** expands the PC pane over the device (`host_only`),
-and clicking it again returns to the device. Selecting or navigating a device
-leaves PC-only mode.
+the pane layout is restored from settings (device-only by default); opening
+the host pane splits the two. Clicking **This computer** expands the PC pane
+over the device (`host_only`), and clicking it again returns to the device.
+Selecting or navigating a device leaves PC-only mode.
 
 All device and host I/O happens on the background executor (`cx.spawn` +
 `background_executor().spawn`); results are applied in an entity update. Never
@@ -213,10 +213,16 @@ resetting the theme to `System` (v1's default was fixed dark). Bump the version
 only when an old *default* must be overwritten, and never re-run a one-time
 migration on later files.
 
-Fields: `theme`, `window_controls`, `translucent_window`, `adb_path`,
-`scrcpy_path`, `concurrent_transfers`, `show_hidden`,
-`open_on_single_click`, `confirm_before_delete`, `default_download_folder`,
-`favorites`, `wireless_devices`.
+Fields: `theme`, `view_mode`, `show_host_pane`, `host_only`,
+`window_controls`, `translucent_window`, `adb_path`, `scrcpy_path`,
+`concurrent_transfers`, `show_hidden`, `open_on_single_click`,
+`confirm_before_delete`, `default_download_folder`, `favorites`,
+`wireless_devices`.
+
+`view_mode` keeps the last list/grid choice. `show_host_pane` and `host_only`
+keep the last split/PC-only arrangement; they are restored when the first
+device appears, while no-device sessions always show the PC full. Tests exercise
+these paths but write no config: `save_settings` is a no-op under `cfg(test)`.
 
 `concurrent_transfers` is persisted but not yet used by any code path.
 `scrcpy_path` overrides the binary launched by the toolbar screen-mirror
